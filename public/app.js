@@ -62,6 +62,7 @@ let snapshot;
 let backend = false;
 let disconnected = false;
 let busy = false;
+let exporting = false;
 let voteDraft = {};
 let lastSignature = '';
 let pollTimer;
@@ -216,7 +217,7 @@ function participants() {
 }
 function leaderboard() {
   const rows=snapshot.leaderboard;
-  return `<section><div class="results-intro"><div><h2>Prioritised role list</h2><p>Average participant scores, weighted by dimension.</p></div><button class="btn" data-action="export" ${rows.length?'':'disabled'}>${icon('download')}Download CSV</button></div>${rows.length?`<table class="leader-table"><thead><tr><th>Rank</th><th>Role title</th><th class="votes-col">Responses</th><th>Weighted score (1–5)</th></tr></thead><tbody>${rows.map((r,i)=>`<tr class="${i===0?'rank-first':''}"><td class="rank">${r.place}</td><td><strong>${esc(r.name)}</strong></td><td class="votes-col">${r.count}</td><td><div class="score-line"><span class="score">${fmt(r.score)} <small>/ 5</small></span>${progress(r.score,5)}</div></td></tr>`).join('')}</tbody></table>`:`<div class="empty">${icon('trophy')}<h2>The prioritised role list will appear after scoring</h2><p>Close scoring for at least one role with submitted scores.</p><button class="btn" data-action="session-tab">Back to workshop ${icon('arrow')}</button></div>`}<p class="small muted" style="margin-top:var(--space-lg)">Weighted score = the sum of each dimension average multiplied by its weight. Roles without responses are excluded.</p></section>`;
+  return `<section><div class="results-intro"><div><h2>Prioritised role list</h2><p>Average participant scores, weighted by dimension.</p></div><button class="btn" data-action="export" ${rows.length&&!exporting?'':'disabled'}>${icon('download')}${exporting?'Preparing Excel…':'Download Excel'}</button></div>${rows.length?`<table class="leader-table"><thead><tr><th>Rank</th><th>Role title</th><th class="votes-col">Responses</th><th>Weighted score (1–5)</th></tr></thead><tbody>${rows.map((r,i)=>`<tr class="${i===0?'rank-first':''}"><td class="rank">${r.place}</td><td><strong>${esc(r.name)}</strong></td><td class="votes-col">${r.count}</td><td><div class="score-line"><span class="score">${fmt(r.score)} <small>/ 5</small></span>${progress(r.score,5)}</div></td></tr>`).join('')}</tbody></table>`:`<div class="empty">${icon('trophy')}<h2>The prioritised role list will appear after scoring</h2><p>Close scoring for at least one role with submitted scores.</p><button class="btn" data-action="session-tab">Back to workshop ${icon('arrow')}</button></div>`}<p class="small muted" style="margin-top:var(--space-lg)">Weighted score = the sum of each dimension average multiplied by its weight. Roles without responses are excluded.</p></section>`;
 }
 function criteriaPage() {
   return `<section class="evaluation"><div class="evaluation-head"><h2>Scoring and calibration</h2><p>The score supports discussion. It does not replace judgement or functional evidence.</p></div><div class="criteria">${criterionRows(null,true)}</div><div class="evaluation-foot">${icon('info')}Score each dimension from 1 to 5. The score supports discussion. It does not replace judgement or functional evidence.</div></section>`;
@@ -286,10 +287,25 @@ function createDialog() {
   if(!backend) return showDialog(`${dialogHeader('Interface preview')}<p>Preview the facilitator view, participant view and prioritised role list. Demo scores are saved only in this browser.</p><p>Connect the workshop database to collect scores from participants on separate phones.</p><div class="actions"><button class="btn btn-primary" data-action="close-dialog">Continue preview</button></div>`);
   showDialog(`${dialogHeader('Start workshop')}<p>Add your role titles. Everyone who has entered their name on this site will join automatically.</p><form id="create-form"><label class="form-group">Workshop title<input name="title" value="Business-Critical Roles Workshop" maxlength="100" required></label><label class="form-group">Role titles<textarea name="roles" placeholder="One role title per line" required maxlength="20000"></textarea><span class="form-hint">Up to 100 roles. You can add more during the workshop.</span></label><p class="form-error" id="dialog-error" role="alert"></p><div class="actions"><button class="btn" type="button" data-action="close-dialog">Cancel</button><button class="btn btn-primary" type="submit">Start workshop</button></div></form>`);
 }
-function exportResults() {
-  const cell=value=>`"${String(value??'').replace(/"/g,'""')}"`;
-  const rows=[['Rank','Role title','Weighted score (1–5)','Responses',...CRITERIA.map(c=>`${c.title} (${c.weight}%)`)],...snapshot.leaderboard.map(r=>[r.place, /^[=+@-]/.test(r.name)?`'${r.name}`:r.name,fmt(r.score),r.count,...r.averages.map(fmt)])];
-  const blob=new Blob(['\ufeff'+rows.map(r=>r.map(cell).join(';')).join('\r\n')],{type:'text/csv;charset=utf-8;'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`rolelab-${code}-results.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+function updateExportButtons() {
+  document.querySelectorAll('[data-action="export"]').forEach(button=>{
+    button.disabled=exporting||!snapshot?.leaderboard.length;
+    button.innerHTML=`${icon('download')}${exporting?'Preparing Excel…':'Download Excel'}`;
+  });
+}
+async function exportResults() {
+  if(exporting)return;
+  exporting=true;updateExportButtons();
+  const current=snapshot, exportCode=code;
+  try {
+    const {createResultsWorkbook}=await import('./excel-export.mjs');
+    const workbook=await createResultsWorkbook(current);
+    const blob=new Blob([await workbook.xlsx.writeBuffer()],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const url=URL.createObjectURL(blob);const a=document.createElement('a');
+    a.href=url;a.download=`rolelab-${exportCode}-results.xlsx`;document.body.append(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+  } catch(error){toast(error.message||'Unable to create the Excel file. Please try again.');}
+  finally{exporting=false;updateExportButtons();}
 }
 document.addEventListener('click',async event=>{
   const el=event.target.closest('[data-action],[data-view],[data-tab],[data-role]');if(!el)return;

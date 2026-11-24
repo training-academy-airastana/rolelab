@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node test/domain.test.mjs && node test/supabase.test.mjs",
+    "test": "node test/domain.test.mjs && node test/supabase.test.mjs && node test/excel-export.test.mjs",
     "build": "node scripts/build-pages.mjs",
     "check": "node --check server.mjs && node --check public/app.js"
   },

@@ -33,7 +33,7 @@ await writeFile(path.join(root, 'dist', 'index.html'), html);
 for(const asset of assets.filter(name=>/\.(?:js|mjs)$/.test(name))) {
   const file=path.join(dist,asset);
   const source=await readFile(file,'utf8');
-  await writeFile(file,source.replace(/\bfrom\s+(['"])(\.[^'"]+\.(?:js|mjs))\1/g,(_,quote,url)=>`from ${quote}${url}?v=${version}${quote}`));
+  await writeFile(file,source.replace(/\b(from\s+|import\s*\(\s*|import\s+)(['"])(\.[^'"]+\.(?:js|mjs))\2/g,(_,prefix,quote,url)=>`${prefix}${quote}${url}?v=${version}${quote}`));
 }
 await writeFile(path.join(root, 'dist', '.nojekyll'), '');
 console.log(configured ? 'Built GitHub Pages site with Supabase.' : 'Built demo interface; Supabase is not configured.');
