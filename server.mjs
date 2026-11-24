@@ -10,6 +10,7 @@ const dataDir=path.join(root,'data');
 await mkdir(dataDir,{recursive:true});
 let sessions={};
 try{sessions=JSON.parse(await readFile(path.join(dataDir,'sessions.json'),'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
+let currentCode=Object.values(sessions).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt)))[0]?.code;
 let saveQueue=Promise.resolve();
 function persist(){const json=JSON.stringify(sessions);const save=saveQueue.then(async()=>{const tmp=path.join(dataDir,'sessions.tmp');await writeFile(tmp,json);await rename(tmp,path.join(dataDir,'sessions.json'));});saveQueue=save.catch(()=>{});return save;}
 const json=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
@@ -28,6 +29,19 @@ const server=http.createServer(async(req,res)=>{
       if(req.method==='POST'&&limited(req))return json(res,429,{error:'Слишком много запросов. Подождите минуту.'});
       if(req.method==='POST'&&req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`&&req.headers.origin!==`https://${req.headers.host}`)return json(res,403,{error:'Запрос с другого сайта отклонён.'});
       const segments=url.pathname.split('/').filter(Boolean);
+      if(segments[1]==='current'&&req.method==='POST'){
+        const input=await body(req);const name=String(input.name||'').trim();const token=input.participantToken;
+        if(!name||name.length>60)throw new Error('Введите имя длиной от 1 до 60 символов.');
+        if(typeof token!=='string'||token.length<32||token.length>128)throw new Error('Обновите страницу и войдите заново.');
+        const meeting=sessions[currentCode];if(!meeting||meeting.finished)return json(res,200,{active:false});
+        let person=meeting.participants.find(p=>p.token===token);
+        if(person&&person.name!==name)throw new Error('Смените имя и войдите заново.');
+        if(!person){
+          if(meeting.participants.length>=200)throw new Error('Достигнут лимит в 200 участников.');
+          person={id:randomUUID(),token,name};meeting.participants.push(person);await persist();
+        }
+        return json(res,200,{active:true,code:meeting.code,...person});
+      }
       if(segments[1]!=='sessions')return json(res,404,{error:'Адрес не найден.'});
       if(segments.length===2&&req.method==='POST'){
         const input=await body(req);const names=Array.isArray(input.roles)?input.roles.map(s=>String(s).trim()).filter(Boolean):[];
@@ -36,6 +50,7 @@ const server=http.createServer(async(req,res)=>{
         let code;do{code=String(randomInt(100000,1000000));}while(sessions[code]);
         const token=randomBytes(24).toString('hex');const roles=names.map(name=>({id:randomUUID(),name,status:'pending',round:1}));
         sessions[code]={code,title,token,roles,currentRoleId:roles[0].id,participants:[],votes:[],finished:false,createdAt:new Date().toISOString()};
+        currentCode=code;
         await persist();return json(res,201,{code,token});
       }
       const session=sessions[segments[2]];if(!session)return json(res,404,{error:'Сессия не найдена. Проверьте ссылку или код.'});

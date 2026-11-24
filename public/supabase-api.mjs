@@ -23,11 +23,15 @@ export function createSupabaseApi({ url, key, getAccessToken = () => '', fetchIm
       body: JSON.stringify(args), signal: AbortSignal.timeout(15000),
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.message || result.error || 'Не удалось связаться с Supabase.');
+    if (!response.ok) {
+      if(name==='rolelab_enter_current'&&result.code==='PGRST202')throw new Error('Автоматическое подключение пока не включено. Попробуйте немного позже.');
+      throw new Error(result.message || result.error || 'Не удалось связаться с Supabase.');
+    }
     return result;
   }
   return async (path, data) => {
     const [resource, code, operation] = path.split('/');
+    if(resource==='current')return rpc('rolelab_enter_current',{p_name:data.name,p_participant_token:data.participantToken});
     if (resource !== 'sessions') throw new Error('Неизвестный запрос.');
     if (!code && data) return rpc('rolelab_create', { p_title: data.title, p_roles: data.roles });
     if (!operation && !data) return rpc('rolelab_snapshot', { p_code: decodeURIComponent(code), p_access_token: getAccessToken() });

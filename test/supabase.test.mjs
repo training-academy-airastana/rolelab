@@ -23,11 +23,63 @@ test('Supabase adapter sends membership and vote credentials to the right RPC on
   await api('sessions/123456');
   await api('sessions/123456/action', { token: 'host-only', action: 'close' });
   await api('sessions/123456/vote', { participantId: 'participant', participantToken: 'personal-key', roleId: 'role', round: 1, scores: [1,2,3,4,5,1] });
+  await api('current', { name: 'Участник', participantToken: 'personal-current-key' });
   assert.equal(calls[0].body.p_access_token, 'invitation-key');
   assert.equal(calls[1].body.p_host_token, 'host-only');
   assert.equal(calls[2].body.p_participant_token, 'personal-key');
   assert.equal(calls[0].headers.apikey, 'sb_publishable_example');
   assert.equal(JSON.stringify(calls[0]).includes('host-only'), false);
+  assert.equal(calls[3].url.endsWith('/rolelab_enter_current'), true);
+  assert.deepEqual(calls[3].body, { p_name: 'Участник', p_participant_token: 'personal-current-key' });
+});
+
+test('current meeting admits and resumes participants without exposing host access', async () => {
+  const db = new PGlite();
+  await db.exec('create role anon; create role authenticated;');
+  for (const file of ['202611240001_rolelab.sql','202611240002_current_meeting.sql']) {
+    await db.exec(await readFile(new URL('../supabase/migrations/'+file, import.meta.url), 'utf8'));
+  }
+  const rpc=async(name,args)=>(await db.query(`select public.${name}(${args.map((_,i)=>'$'+(i+1)).join(',')}) as value`,args)).rows[0].value;
+  const token='personal-current-token-12345678901234567890';
+  const enter=(name='Участник',key=token)=>rpc('rolelab_enter_current',[name,key]);
+  try {
+    assert.deepEqual(await enter(),{active:false});
+    const first=await rpc('rolelab_create',['Первая встреча',['Роль']]);
+    await db.exec('set role anon');
+    const person=await enter();
+    assert.equal(person.code,first.code);
+    assert.equal(person.active,true);
+    assert.equal((await enter()).id,person.id);
+    assert.equal(JSON.stringify(person).includes(first.token),false);
+    assert.equal(JSON.stringify(person).includes(first.inviteToken),false);
+    const state=await rpc('rolelab_snapshot',[person.code,person.token]);
+    assert.equal(state.participants.length,1);
+    assert.deepEqual(state.results,{});
+    await assert.rejects(()=>rpc('rolelab_action',[person.code,person.token,'open',null]),/ведущему/);
+    await assert.rejects(()=>enter('Другое имя'),/Смените имя/);
+    await assert.rejects(()=>enter(''),/Введите имя/);
+    await assert.rejects(()=>enter('Участник','short'),/Обновите страницу/);
+    await assert.rejects(()=>db.query('select * from rolelab_private.current_meeting'),/permission denied/);
+    const second=await rpc('rolelab_create',['Вторая встреча',['Роль']]);
+    assert.equal((await enter()).code,second.code);
+    await rpc('rolelab_action',[first.code,first.token,'finish',null]);
+    assert.equal((await enter()).code,second.code);
+    await rpc('rolelab_action',[second.code,second.token,'open',null]);
+    const secondPerson=await enter();
+    const secondState=await rpc('rolelab_snapshot',[second.code,secondPerson.token]);
+    await rpc('rolelab_vote',[second.code,secondPerson.id,secondPerson.token,secondState.currentRoleId,1,[5,4,3,2,1,5]]);
+    await rpc('rolelab_action',[second.code,second.token,'close',null]);
+    await rpc('rolelab_action',[second.code,second.token,'finish',null]);
+    assert.deepEqual(await enter(),{active:false});
+    assert.equal((await rpc('rolelab_snapshot',[second.code,secondPerson.token])).leaderboard.length,1);
+    const third=await rpc('rolelab_create',['Третья встреча',['Роль']]);
+    assert.equal((await enter()).code,third.code);
+    await db.exec('reset role');
+    await db.query("insert into rolelab_private.participants(session_code,name,token_hash) select $1,'Заполнение',n::text from generate_series(1,199) n",[third.code]);
+    await db.exec('set role anon');
+    assert.equal((await enter()).code,third.code);
+    await assert.rejects(()=>enter('Новый','other-person-token-12345678901234567890'),/200 участников/);
+  } finally { await db.close(); }
 });
 
 test('PostgreSQL migration enforces session ownership, complete ballots and private aggregates', async () => {

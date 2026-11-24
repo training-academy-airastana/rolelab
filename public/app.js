@@ -36,9 +36,15 @@ const newId = () => crypto.randomUUID?.() || Array.from(crypto.getRandomValues(n
 const peopleLabel = count => `${count} ${{one:'участник',few:'участника',many:'участников',other:'участника'}[new Intl.PluralRules('ru').select(count)]}`;
 const params = new URLSearchParams(location.search);
 const ENTRY_KEY = 'rolelab-entry-v1';
+const AUTO_PERSON_KEY = 'rolelab-current-person-v1';
 let profile = null;
 try { const saved = JSON.parse(sessionStorage.getItem(ENTRY_KEY)); if (saved?.name) profile = entryProfile(saved.name); } catch {}
 let invitedToDemo = params.get('view') === 'participant';
+let automaticSession = !params.has('s') && !invitedToDemo;
+let waitingForCurrent = true;
+let waitingError = '';
+let refreshing = false;
+let automaticPerson = null;
 let joining = null;
 let view = params.get('view') || 'host';
 let tab = params.get('tab') || 'session';
@@ -62,19 +68,20 @@ function demoInitial() {
 }
 function demoGet() { return readLocal(DEMO_KEY) || demoInitial(); }
 function demoSet(state) { writeLocal(DEMO_KEY, state); snapshot = publicSnapshot(state); lastSignature = JSON.stringify(snapshot); }
-function identity() { const person = readLocal(`rolelab-person-${code}`); return isAdministrator(profile) || person?.name === profile?.name ? person : null; }
+function identity() { const person = usesCurrentMeeting() ? automaticPerson : readLocal(`rolelab-person-${code}`); return isAdministrator(profile) || person?.name === profile?.name ? person : null; }
 function hostToken() { return readLocal(`rolelab-host-${code}`); }
 function inviteToken() { return readLocal(`rolelab-invite-${code}`) || linkAccessKey; }
 function accessToken() { return (isAdministrator(profile) ? hostToken() : '') || identity()?.token || inviteToken() || ''; }
 function isHost() { return isAdministrator(profile) && (code === 'demo' || !!hostToken()); }
+function usesCurrentMeeting() { return automaticSession && !isAdministrator(profile) && !invitedToDemo; }
 function currentRole() { return snapshot?.roles.find(r => r.id === snapshot.currentRoleId); }
 function route(nextView, nextTab = 'session') {
   if (!isAdministrator(profile)) nextView = 'participant';
   if (code === 'demo' && nextView === 'participant' && isAdministrator(profile)) invitedToDemo = true;
   view = nextView; tab = nextTab;
-  const url = new URL(location.href); url.search = ''; if (code !== 'demo') url.searchParams.set('s', code);
-  if (linkAccessKey && code !== 'demo') url.searchParams.set('key', linkAccessKey);
-  if (view !== 'host' && (code !== 'demo' || invitedToDemo)) url.searchParams.set('view', view);
+  const url = new URL(location.href); url.search = ''; if (code !== 'demo' && !usesCurrentMeeting()) url.searchParams.set('s', code);
+  if (linkAccessKey && code !== 'demo' && !usesCurrentMeeting()) url.searchParams.set('key', linkAccessKey);
+  if (view !== 'host' && !usesCurrentMeeting() && (code !== 'demo' || invitedToDemo)) url.searchParams.set('view', view);
   if (tab !== 'session') url.searchParams.set('tab', tab);
   history.pushState({}, '', url); render();
 }
@@ -86,7 +93,7 @@ function entryPage() {
   return `${entryHeader()}<main class="mobile-page entry-page"><h1>Давайте познакомимся.</h1><p class="entry-intro">Введите имя, чтобы присоединиться к оценке бизнес-ролей.</p><form id="entry-form" class="join-form"><label class="form-group" for="entry-name">Ваше имя<input id="entry-name" name="name" autocomplete="given-name" maxlength="60" required placeholder="Как к вам обращаться" aria-describedby="entry-hint"></label><p class="form-hint" id="entry-hint">Так вас увидит ведущий встречи.</p><p class="form-error" id="form-error" role="alert"></p><button class="btn btn-primary btn-wide" type="submit">Войти ${icon('arrow')}</button></form><p class="entry-footnote">Калибровка бизнес-ролей</p></main>`;
 }
 function waitingRoom() {
-  return `${entryHeader()}<main class="mobile-page"><div class="wait-block"><div class="success-icon">${icon('clock')}</div><p class="entry-greeting">${esc(profile.name)}, вы готовы.</p><h1>Ждём начала сессии</h1><p class="entry-intro">Ведущий готовит встречу. Оставайтесь на этой странице.</p></div><p class="entry-footnote">Оценивание откроет ведущий.</p></main>`;
+  return `${entryHeader()}<main class="mobile-page" id="waiting-room"><div class="wait-block"><div class="success-icon">${icon('clock')}</div><p class="entry-greeting">${esc(profile.name)}, вы готовы.</p><h1>Ждём начала встречи</h1><p class="entry-intro">Когда ведущий начнёт встречу, вы подключитесь автоматически.</p>${waitingError?`<p class="live-error" role="alert">${esc(waitingError)}</p><button class="btn" data-action="retry">Попробовать снова</button>`:''}</div><p class="entry-footnote">Оставьте эту страницу открытой.</p></main>`;
 }
 async function api(path, data) {
   if (cloudApi) return cloudApi(path, data);
@@ -95,11 +102,31 @@ async function api(path, data) {
 }
 async function refresh(force = false) {
   if (!profile) { if (!$('#entry-form')) render(); return; }
-  if (waitsForInvitation(profile, code, invitedToDemo)) { if (force || !$('#waiting-room')) render(); return; }
+  if (!usesCurrentMeeting() && waitsForInvitation(profile, code, invitedToDemo)) { if (force || !$('#waiting-room')) render(); return; }
+  if (refreshing) return;
+  refreshing = true;
   const entry = profile; const sessionCode = code;
   try {
+    if (usesCurrentMeeting()) {
+      let person=automaticPerson || readLocal(AUTO_PERSON_KEY);
+      if(person?.name!==entry.name){person={name:entry.name,token:newId()};writeLocal(AUTO_PERSON_KEY,person);}
+      automaticPerson=person;
+      const current=await api('current',{name:entry.name,participantToken:person.token});
+      if(profile!==entry || !usesCurrentMeeting())return;
+      const hadError=!!waitingError;waitingError='';
+      if(current.active){
+        if(code!==current.code){snapshot=null;lastSignature='';voteDraft={};}
+        code=current.code;waitingForCurrent=false;
+        automaticPerson={code:current.code,id:current.id,token:current.token,name:current.name};
+        if(person.code!==current.code||person.id!==current.id)writeLocal(AUTO_PERSON_KEY,automaticPerson);
+        writeLocal(`rolelab-person-${code}`,automaticPerson);
+      }else if(!snapshot){
+        if(person.code){code=person.code;waitingForCurrent=false;}
+        else {waitingForCurrent=true;if(force||hadError||!$('#waiting-room'))render();return;}
+      }
+    }
     let next = code === 'demo' ? publicSnapshot(demoGet()) : await api(`sessions/${encodeURIComponent(code)}`);
-    if (profile !== entry || code !== sessionCode) return;
+    if (profile !== entry || (!usesCurrentMeeting() && code !== sessionCode)) return;
     if (!isAdministrator(profile) && code === 'demo' && invitedToDemo && !next.participants.some(p=>p.id===identity()?.id)) {
       const state=demoGet();const person={id:newId(),token:newId(),name:profile.name};state.participants.push(person);
       writeLocal(`rolelab-person-${code}`,person);demoSet(state);next=publicSnapshot(state);
@@ -113,10 +140,13 @@ async function refresh(force = false) {
       if (profile !== entry || code !== sessionCode) return;
       next = await api(`sessions/${encodeURIComponent(code)}`);
     }
-    if (profile !== entry || code !== sessionCode) return;
+    if (profile !== entry || (!usesCurrentMeeting() && code !== sessionCode)) return;
     const signature = JSON.stringify(next);
     if (force || signature !== lastSignature || disconnected) { snapshot = next; lastSignature = signature; disconnected = false; render(); }
-  } catch (error) { if (profile === entry && code === sessionCode && (!disconnected || !snapshot)) { disconnected = true; renderError(error.message); } }
+  } catch (error) {
+    if(profile===entry && usesCurrentMeeting() && !snapshot){waitingForCurrent=true;waitingError=error.message;render();}
+    else if (profile === entry && code === sessionCode && (!disconnected || !snapshot)) { disconnected = true; renderError(error.message); }
+  } finally { refreshing=false; }
 }
 function renderError(message) {
   if (!snapshot) $('#app').innerHTML = `${header()}<main class="container page"><div class="empty">${icon('globe')}<h1>Не удалось открыть сессию</h1><p>${esc(message)}</p><button class="btn btn-primary" data-action="retry">Попробовать снова</button><a class="btn" href="./">На главную</a></div></main>`;
@@ -126,7 +156,7 @@ function header() {
   if (!isAdministrator(profile)) return entryHeader();
   return `<header class="topbar"><div class="container topbar-inner"><a class="brand" href="./" aria-label="Rolelab, главная"><span class="brand-mark">${icon('chart')}</span>Rolelab<span class="brand-sub">Совместная оценка критичности ролей</span></a><div class="header-actions"><button class="btn btn-link" data-action="change-name" aria-label="Сменить имя">${icon('users')}<span>Сменить имя</span></button>${code === 'demo' ? '<span class="badge">Демо-интерфейс</span>' : `<span class="badge ${disconnected ? 'badge-amber' : 'badge-green'}">${disconnected ? 'Переподключение' : 'Подключено'}</span>`}${view === 'host' ? `<button class="btn" data-action="present" aria-label="Открыть общий экран">${icon('monitor')}<span>Общий экран</span></button><button class="btn" data-action="invite" aria-label="Пригласить участников">${icon('link')}<span>Пригласить</span></button>` : `<button class="btn btn-link" data-action="${isHost() ? 'host-view' : 'invite'}">${icon(isHost() ? 'settings' : 'link')}<span>${isHost() ? 'Ведущий' : 'Пригласить'}</span></button>`}</div></div></header>`;
 }
-function demoNote() { return code === 'demo' ? `<div class="demo-note"><span><strong>Режим знакомства.</strong> Роли приведены для примера. <button class="btn btn-link" data-action="reset-demo">Сбросить демо</button></span><button class="btn" data-action="create">Создать сессию ${icon('plus')}</button></div>` : ''; }
+function demoNote() { return code === 'demo' ? `<div class="demo-note"><span><strong>Режим знакомства.</strong> Роли приведены для примера. <button class="btn btn-link" data-action="reset-demo">Сбросить демо</button></span><button class="btn" data-action="create">Начать встречу ${icon('plus')}</button></div>` : ''; }
 function viewSwitcher() {
   if (!isAdministrator(profile)) return '';
   return `<div class="view-switch" aria-label="Вид интерфейса">${[['host','settings','Ведущий'],['participant','phone','Участник'],['present','monitor','Общий экран']].map(([v,ic,title])=>`<button type="button" class="${view === v ? 'active' : ''}" data-view="${v}" aria-pressed="${view === v}">${icon(ic)}${title}</button>`).join('')}</div>`;
@@ -140,7 +170,7 @@ function statusBadge(role) {
 function progress(value, total) { return `<div class="progress" role="progressbar" aria-valuenow="${value}" aria-valuemin="0" aria-valuemax="${Math.max(1,total)}" aria-label="Получено ответов"><span class="progress-fill" style="--progress:${total ? value/total : 0}"></span></div>`; }
 function hostPage() {
   const done = snapshot.roles.filter(r=>r.status === 'closed').length;
-  return `${header()}<main class="container page">${demoNote()}${disconnected ? '<div id="connection-error" class="live-error" role="alert">Восстанавливаем подключение…</div>' : ''}<div class="page-heading"><div><h1>${esc(snapshot.title)}</h1><p>Шесть критериев. Независимые оценки. Общая картина.</p></div><div class="session-meta"><div><span class="small muted">Код сессии&nbsp; </span><span class="code">${code === 'demo' ? 'ДЕМО' : esc(code)}</span></div><span class="divider"></span><span class="row small muted">${icon('users')}${peopleLabel(snapshot.participants.length)}</span></div></div><div class="tabbar"><nav class="tabs" aria-label="Разделы сессии">${[['session','list','Сессия'],['ranking','trophy','Рейтинг ролей'],['criteria','settings','Критерии']].map(([t,ic,label])=>`<a href="?${new URLSearchParams({...(code!=='demo'?{s:code}:{}),tab:t})}" class="tab ${tab===t?'active':''}" data-tab="${t}" ${tab===t?'aria-current="page"':''}>${icon(ic)}${label}${t==='ranking'?`<span class="tab-count">${snapshot.leaderboard.length}</span>`:''}</a>`).join('')}</nav><span class="small muted">${done} из ${snapshot.roles.length} ролей оценено</span></div>${tab==='ranking'?leaderboard():tab==='criteria'?criteriaPage():hostWorkspace()}<footer class="bottom-bar"><span class="row">${icon('lock')}Оценки скрыты до закрытия голосования</span>${viewSwitcher()}<button class="btn btn-link" data-action="finish" ${snapshot.finished?'disabled':''}>${icon('trophy')}Завершить сессию</button></footer></main>`;
+  return `${header()}<main class="container page">${demoNote()}${disconnected ? '<div id="connection-error" class="live-error" role="alert">Восстанавливаем подключение…</div>' : ''}<div class="page-heading"><div><h1>${esc(snapshot.title)}</h1><p>Шесть критериев. Независимые оценки. Общая картина.</p></div><div class="session-meta"><span class="badge">${code === 'demo' ? 'Демонстрация' : 'Общая встреча'}</span><span class="divider"></span><span class="row small muted">${icon('users')}${peopleLabel(snapshot.participants.length)}</span></div></div><div class="tabbar"><nav class="tabs" aria-label="Разделы сессии">${[['session','list','Встреча'],['ranking','trophy','Рейтинг ролей'],['criteria','settings','Критерии']].map(([t,ic,label])=>`<a href="?${new URLSearchParams({...(code!=='demo'?{s:code}:{}),tab:t})}" class="tab ${tab===t?'active':''}" data-tab="${t}" ${tab===t?'aria-current="page"':''}>${icon(ic)}${label}${t==='ranking'?`<span class="tab-count">${snapshot.leaderboard.length}</span>`:''}</a>`).join('')}</nav><span class="small muted">${done} из ${snapshot.roles.length} ролей оценено</span></div>${tab==='ranking'?leaderboard():tab==='criteria'?criteriaPage():hostWorkspace()}<footer class="bottom-bar"><span class="row">${icon('lock')}Оценки скрыты до закрытия голосования</span>${viewSwitcher()}<button class="btn btn-link" data-action="finish" ${snapshot.finished?'disabled':''}>${icon('trophy')}Завершить встречу</button></footer></main>`;
 }
 function hostWorkspace() {
   const role = currentRole();
@@ -185,11 +215,11 @@ function participantPage() {
 }
 function presentPage() {
   const role=currentRole();
-  return `${header()}<main class="present-page">${code==='demo'?'<span class="badge">Демонстрация общего экрана</span>':''}${snapshot.finished?leaderboard():`<div class="present-role">${statusBadge(role)}<h1 style="margin-top:var(--space-lg)">${esc(role?.name||'Ожидаем начала сессии')}</h1></div><div class="present-grid"><section><div class="criteria">${criterionRows(role)}</div></section><aside><div class="present-count">${snapshot.currentCount}<small> / ${snapshot.participants.length}</small></div><p class="muted">участников отправили оценки</p>${progress(snapshot.currentCount,snapshot.participants.length)}${role?.status==='closed'&&snapshot.results[role.id]?.count?`<div style="margin-top:var(--space-xl)"><span class="small muted">Итог роли из 5</span><p class="score-large">${fmt(snapshot.results[role.id].score)}</p></div>`:''}<div class="present-invite"><p class="small muted">Присоединяйтесь с телефона</p><strong>${code==='demo'?'ДЕМО':esc(code)}</strong><p class="join-url">${esc(joinUrl())}</p></div></aside></div>`}<footer class="bottom-bar"><span>Калибровка бизнес-ролей</span>${code==='demo'||isHost()?viewSwitcher():''}</footer></main>`;
+  return `${header()}<main class="present-page">${code==='demo'?'<span class="badge">Демонстрация общего экрана</span>':''}${snapshot.finished?leaderboard():`<div class="present-role">${statusBadge(role)}<h1 style="margin-top:var(--space-lg)">${esc(role?.name||'Ожидаем начала сессии')}</h1></div><div class="present-grid"><section><div class="criteria">${criterionRows(role)}</div></section><aside><div class="present-count">${snapshot.currentCount}<small> / ${snapshot.participants.length}</small></div><p class="muted">участников отправили оценки</p>${progress(snapshot.currentCount,snapshot.participants.length)}${role?.status==='closed'&&snapshot.results[role.id]?.count?`<div style="margin-top:var(--space-xl)"><span class="small muted">Итог роли из 5</span><p class="score-large">${fmt(snapshot.results[role.id].score)}</p></div>`:''}<div class="present-invite"><p class="small muted">Присоединяйтесь с телефона</p><strong>Откройте Rolelab и введите имя</strong><p class="join-url">${esc(joinUrl())}</p></div></aside></div>`}<footer class="bottom-bar"><span>Калибровка бизнес-ролей</span>${code==='demo'||isHost()?viewSwitcher():''}</footer></main>`;
 }
 function render() {
   if (!profile) { $('#app').innerHTML = entryPage(); return; }
-  if (waitsForInvitation(profile, code, invitedToDemo)) { $('#app').innerHTML = waitingRoom(); $('#app main').id = 'waiting-room'; return; }
+  if ((usesCurrentMeeting() && waitingForCurrent) || (!usesCurrentMeeting() && waitsForInvitation(profile, code, invitedToDemo))) { $('#app').innerHTML = waitingRoom(); return; }
   if(!snapshot) return;
   if (!isAdministrator(profile)) view = 'participant';
   if(!isHost()&&view==='host') view='participant';
@@ -198,7 +228,7 @@ function render() {
   $('#app').innerHTML=view==='participant'?participantPage():view==='present'?presentPage():hostPage();
   if(focusName){ const next=document.getElementsByName(focusName)[0]; if(next && next.type!=='radio'){if(inputValue!==undefined)next.value=inputValue;next.focus({preventScroll:true});if(typeof selection==='number')try{next.setSelectionRange(selection,selection);}catch{}} }
 }
-function joinUrl() { return invitationUrl(location.href, code, inviteToken()); }
+function joinUrl() { if(code==='demo')return invitationUrl(location.href,code);const url=new URL(location.href);url.search='';url.hash='';return url.href; }
 function showDialog(content) { const dialog=$('#dialog'); dialog.innerHTML=content; if(!dialog.open)dialog.showModal(); }
 function dialogHeader(title) { return `<div class="dialog-title"><h2>${title}</h2><button class="btn btn-link icon-btn" data-action="close-dialog" aria-label="Закрыть">${icon('close')}</button></div>`; }
 async function copy(text) { try { await navigator.clipboard.writeText(text); toast('Ссылка скопирована'); } catch { showDialog(`${dialogHeader('Ссылка для участников')}<p>Скопируйте ссылку и отправьте участникам.</p><div class="copy-field">${esc(text)}</div>`); } }
@@ -213,7 +243,7 @@ async function act(action,roleId) {
 }
 function createDialog() {
   if(!backend) return showDialog(`${dialogHeader('Онлайн-просмотр интерфейса')}<p>Здесь можно проверить экраны ведущего, участника и рейтинг. Голоса демонстрации сохраняются только в этом браузере.</p><p>Для совместной встречи нужно подключить базу сессий. После подключения участники смогут оценивать роли с разных телефонов.</p><div class="actions"><button class="btn btn-primary" data-action="close-dialog">Продолжить просмотр</button></div>`);
-  showDialog(`${dialogHeader('Новая сессия')}<p>Добавьте ваши роли. Участники смогут подключиться по отдельной ссылке.</p><form id="create-form"><label class="form-group">Название встречи<input name="title" value="Калибровка бизнес-ролей" maxlength="100" required></label><label class="form-group">Бизнес-роли<textarea name="roles" placeholder="По одной роли на строку" required maxlength="20000"></textarea><span class="form-hint">До 100 ролей. Список можно дополнить во время встречи.</span></label><p class="form-error" id="dialog-error" role="alert"></p><div class="actions"><button class="btn" type="button" data-action="close-dialog">Отмена</button><button class="btn btn-primary" type="submit">Создать сессию</button></div></form>`);
+  showDialog(`${dialogHeader('Начать встречу')}<p>Добавьте ваши роли. Все, кто ввёл имя на сайте, подключатся автоматически.</p><form id="create-form"><label class="form-group">Название встречи<input name="title" value="Калибровка бизнес-ролей" maxlength="100" required></label><label class="form-group">Бизнес-роли<textarea name="roles" placeholder="По одной роли на строку" required maxlength="20000"></textarea><span class="form-hint">До 100 ролей. Список можно дополнить во время встречи.</span></label><p class="form-error" id="dialog-error" role="alert"></p><div class="actions"><button class="btn" type="button" data-action="close-dialog">Отмена</button><button class="btn btn-primary" type="submit">Начать встречу</button></div></form>`);
 }
 function exportResults() {
   const cell=value=>`"${String(value??'').replace(/"/g,'""')}"`;
@@ -227,7 +257,7 @@ document.addEventListener('click',async event=>{
   if(el.dataset.role){await act('select',el.dataset.role);return;}
   const action=el.dataset.action;
   if(action==='change-name'){
-    profile=null;joining=null;voteDraft={};try{sessionStorage.removeItem(ENTRY_KEY);}catch{}
+    profile=null;joining=null;automaticPerson=null;voteDraft={};waitingForCurrent=true;waitingError='';snapshot=null;lastSignature='';try{sessionStorage.removeItem(ENTRY_KEY);}catch{}
     $('#dialog').close();render();return;
   }
   if(!profile || (!isAdministrator(profile) && !['retry','invite','export','close-dialog'].includes(action)))return;
@@ -244,7 +274,7 @@ document.addEventListener('click',async event=>{
   else if(action==='export')exportResults();
   else if(action==='open'||action==='close')await act(action);
   else if(action==='next'){const next=snapshot.roles.find(r=>r.status==='pending');if(next)await act('select',next.id);else route('host','ranking');}
-  else if(action==='finish')showDialog(`${dialogHeader('Завершить сессию?')}<p>После завершения участники увидят итоговый рейтинг. Новые оценки больше не принимаются. Неоценённые роли останутся без итогового балла.</p><div class="actions"><button class="btn" data-action="close-dialog">Продолжить встречу</button><button class="btn btn-primary" data-action="confirm-finish">Завершить и показать рейтинг</button></div>`);
+  else if(action==='finish')showDialog(`${dialogHeader('Завершить встречу?')}<p>После завершения участники увидят итоговый рейтинг. Новые оценки больше не принимаются. Неоценённые роли останутся без итогового балла.</p><div class="actions"><button class="btn" data-action="close-dialog">Продолжить встречу</button><button class="btn btn-primary" data-action="confirm-finish">Завершить и показать рейтинг</button></div>`);
   else if(action==='confirm-finish'){await act('finish');if(snapshot.finished){$('#dialog').close();route('host','ranking');}}
   else if(action==='add-role')showDialog(`${dialogHeader('Добавить бизнес-роль')}<form id="add-role-form"><label class="form-group">Название роли<input name="role" maxlength="150" required placeholder="Введите название роли"></label><p class="form-error" id="dialog-error" role="alert"></p><div class="actions"><button class="btn btn-primary" type="submit">Добавить роль</button></div></form>`);
 });
@@ -256,13 +286,14 @@ document.addEventListener('submit',async event=>{
     const data=new FormData(form);
     if(form.id==='entry-form'){
       profile=entryProfile(data.get('name'));try{sessionStorage.setItem(ENTRY_KEY,JSON.stringify(profile));}catch{}
+      if(!isAdministrator(profile)&&automaticSession){code='demo';linkAccessKey='';snapshot=null;lastSignature='';}
       if(isAdministrator(profile)){
         if(code!=='demo'&&!hostToken()){code='demo';linkAccessKey='';snapshot=null;lastSignature='';}
         route('host');
       }else route('participant');
       await refresh(true);
     } else if(form.id==='create-form'){
-      if(!isAdministrator(profile))throw new Error('Создать сессию может только администратор.');
+      if(!isAdministrator(profile))throw new Error('Начать встречу может только администратор.');
       const result=await api('sessions',{title:data.get('title'),roles:String(data.get('roles')).split(/\r?\n/).map(s=>s.trim()).filter(Boolean)});
       code=result.code;linkAccessKey='';writeLocal(`rolelab-host-${code}`,result.token);if(result.inviteToken)writeLocal(`rolelab-invite-${code}`,result.inviteToken);$('#dialog').close();snapshot=null;lastSignature='';route('host');await refresh(true);
     } else if(form.id==='join-form'){
@@ -286,7 +317,7 @@ document.addEventListener('submit',async event=>{
   finally{busy=false;if(button.isConnected){button.disabled=false;button.innerHTML=originalLabel;}}
 });
 window.addEventListener('storage',event=>{if(event.key===DEMO_KEY&&code==='demo')refresh();});
-window.addEventListener('popstate',()=>{const query=new URLSearchParams(location.search);view=query.get('view')||'host';tab=query.get('tab')||'session';code=query.get('s')||'demo';linkAccessKey=query.get('key')||'';invitedToDemo=query.get('view')==='participant';snapshot=null;lastSignature='';refresh(true);});
+window.addEventListener('popstate',()=>{const query=new URLSearchParams(location.search);view=query.get('view')||'host';tab=query.get('tab')||'session';code=query.get('s')||'demo';linkAccessKey=query.get('key')||'';invitedToDemo=query.get('view')==='participant';automaticSession=!query.has('s')&&!invitedToDemo;waitingForCurrent=true;waitingError='';snapshot=null;lastSignature='';refresh(true);});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
 async function init(){
   try {
