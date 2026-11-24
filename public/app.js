@@ -39,13 +39,15 @@ const peopleLabel = count => `${count} ${{one:'участник',few:'участ
 const params = new URLSearchParams(location.search);
 const ENTRY_KEY = 'rolelab-entry-v1';
 const AUTO_PERSON_KEY = 'rolelab-current-person-v1';
+const LAST_HOST_KEY = 'rolelab-last-host-v1';
+const demoRequested = params.get('demo') === '1';
 let profile = null;
 try { const saved = JSON.parse(sessionStorage.getItem(ENTRY_KEY)); if (saved?.name) profile = entryProfile(saved.name); } catch {}
 let invitedToDemo = params.get('view') === 'participant';
 let automaticSession = !params.has('s') && !invitedToDemo;
 let waitingForCurrent = true;
 let waitingError = '';
-let refreshing = false;
+let refreshTask = null;
 let automaticPerson = null;
 let joining = null;
 let view = params.get('view') || 'host';
@@ -74,7 +76,15 @@ function identity() { const person = usesCurrentMeeting() ? automaticPerson : re
 function hostToken() { return readLocal(`rolelab-host-${code}`); }
 function inviteToken() { return readLocal(`rolelab-invite-${code}`) || linkAccessKey; }
 function accessToken() { return (isAdministrator(profile) ? hostToken() : '') || identity()?.token || inviteToken() || ''; }
-function isHost() { return isAdministrator(profile) && (code === 'demo' || !!hostToken()); }
+function isHost() { return isAdministrator(profile) && (code === 'demo' ? demoRequested : !!hostToken()); }
+function needsHostSetup() { return isAdministrator(profile) && code === 'demo' && !demoRequested; }
+function restoreHostMeeting() {
+  if(!needsHostSetup())return;
+  const previous=readLocal(LAST_HOST_KEY);
+  if(previous&&readLocal(`rolelab-host-${previous}`)){
+    code=previous;const url=new URL(location.href);url.search='';url.searchParams.set('s',code);history.replaceState({},'',url);
+  }
+}
 function usesCurrentMeeting() { return automaticSession && !isAdministrator(profile) && !invitedToDemo; }
 function currentRole() { return snapshot?.roles.find(r => r.id === snapshot.currentRoleId); }
 function route(nextView, nextTab = 'session') {
@@ -82,6 +92,7 @@ function route(nextView, nextTab = 'session') {
   if (code === 'demo' && nextView === 'participant' && isAdministrator(profile)) invitedToDemo = true;
   view = nextView; tab = nextTab;
   const url = new URL(location.href); url.search = ''; if (code !== 'demo' && !usesCurrentMeeting()) url.searchParams.set('s', code);
+  if(demoRequested)url.searchParams.set('demo','1');
   if (linkAccessKey && code !== 'demo' && !usesCurrentMeeting()) url.searchParams.set('key', linkAccessKey);
   if (view !== 'host' && !usesCurrentMeeting() && (code !== 'demo' || invitedToDemo)) url.searchParams.set('view', view);
   if (tab !== 'session') url.searchParams.set('tab', tab);
@@ -102,11 +113,15 @@ async function api(path, data) {
   const response = await fetch(new URL(`./api/${path}`, location.href), { method: data ? 'POST' : 'GET', headers: data ? { 'Content-Type': 'application/json' } : {}, body: data ? JSON.stringify(data) : undefined, signal: AbortSignal.timeout(10000) });
   const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Не удалось выполнить запрос.'); return result;
 }
-async function refresh(force = false) {
+function refresh(force = false) {
+  if(refreshTask)return force?refreshTask.then(()=>refresh(true)):refreshTask;
+  refreshTask=refreshNow(force).finally(()=>{refreshTask=null;});
+  return refreshTask;
+}
+async function refreshNow(force = false) {
   if (!profile) { if (!$('#entry-form')) render(); return; }
+  if (needsHostSetup()) { if (force || !$('#host-setup')) render(); return; }
   if (!usesCurrentMeeting() && waitsForInvitation(profile, code, invitedToDemo)) { if (force || !$('#waiting-room')) render(); return; }
-  if (refreshing) return;
-  refreshing = true;
   const entry = profile; const sessionCode = code;
   try {
     if (usesCurrentMeeting()) {
@@ -143,19 +158,20 @@ async function refresh(force = false) {
       next = await api(`sessions/${encodeURIComponent(code)}`);
     }
     if (profile !== entry || (!usesCurrentMeeting() && code !== sessionCode)) return;
+    if(isAdministrator(profile)&&code!=='demo'&&hostToken())writeLocal(LAST_HOST_KEY,code);
     const signature = JSON.stringify(next);
     if (force || signature !== lastSignature || disconnected) { snapshot = next; lastSignature = signature; disconnected = false; render(); }
   } catch (error) {
     if(profile===entry && usesCurrentMeeting() && !snapshot){waitingForCurrent=true;waitingError=error.message;render();}
     else if (profile === entry && code === sessionCode && (!disconnected || !snapshot)) { disconnected = true; renderError(error.message); }
-  } finally { refreshing=false; }
+  }
 }
 function renderError(message) {
   if (!snapshot) $('#app').innerHTML = `${header()}<main class="container page"><div class="empty">${icon('globe')}<h1>Не удалось открыть сессию</h1><p>${esc(message)}</p><button class="btn btn-primary" data-action="retry">Попробовать снова</button><a class="btn" href="./">На главную</a></div></main>`;
   else { render(); const errorEl = $('#connection-error'); if (errorEl) errorEl.textContent = 'Связь прервана. Восстанавливаем подключение; отправка временно недоступна.'; }
 }
 function header() {
-  if (!isAdministrator(profile)) return entryHeader();
+  if (!isAdministrator(profile) || needsHostSetup()) return entryHeader();
   return `<header class="topbar"><div class="container topbar-inner"><a class="brand" href="./" aria-label="Rolelab, главная"><span class="brand-mark">${icon('chart')}</span>Rolelab<span class="brand-sub">Совместная оценка критичности ролей</span></a><div class="header-actions"><button class="btn btn-link" data-action="change-name" aria-label="Сменить имя">${icon('users')}<span>Сменить имя</span></button>${code === 'demo' ? '<span class="badge">Демо-интерфейс</span>' : `<span class="badge ${disconnected ? 'badge-amber' : 'badge-green'}">${disconnected ? 'Переподключение' : 'Подключено'}</span>`}${view === 'host' ? `<button class="btn" data-action="present" aria-label="Открыть общий экран">${icon('monitor')}<span>Общий экран</span></button><button class="btn" data-action="invite" aria-label="Показать QR-код">${icon('qr')}<span>QR-код</span></button>` : `<button class="btn btn-link" data-action="${isHost() ? 'host-view' : 'invite'}">${icon(isHost() ? 'settings' : 'link')}<span>${isHost() ? 'Ведущий' : 'Пригласить'}</span></button>`}</div></div></header>`;
 }
 function demoNote() { return code === 'demo' ? `<div class="demo-note"><span><strong>Режим знакомства.</strong> Роли приведены для примера. <button class="btn btn-link" data-action="reset-demo">Сбросить демо</button></span><button class="btn" data-action="create">Начать встречу ${icon('plus')}</button></div>` : ''; }
@@ -170,14 +186,16 @@ function statusBadge(role) {
   return '<span class="badge">Ожидает старта</span>';
 }
 function progress(value, total) { return `<div class="progress" role="progressbar" aria-valuenow="${value}" aria-valuemin="0" aria-valuemax="${Math.max(1,total)}" aria-label="Получено ответов"><span class="progress-fill" style="--progress:${total ? value/total : 0}"></span></div>`; }
+function hostSetup() {
+  return `${header()}<main class="mobile-page host-setup" id="host-setup"><span class="section-label">Панель ведущего</span><h1>Начнём встречу</h1><p class="entry-intro">Добавьте роли и начните встречу. Все участники на сайте подключатся автоматически.</p><form id="create-form" class="join-form"><label class="form-group">Название встречи<input name="title" value="Калибровка бизнес-ролей" maxlength="100" required></label><label class="form-group">Роли для оценки<textarea name="roles" rows="7" required maxlength="20000" placeholder="По одной роли на строку"></textarea><span class="form-hint">До 100 ролей. Для каждой достаточно названия.</span></label><p class="form-error" role="alert"></p><button class="btn btn-primary btn-wide" type="submit">Начать встречу ${icon('arrow')}</button></form><button class="btn btn-link btn-wide" data-action="invite">${icon('qr')}Показать QR-код участникам</button></main>`;
+}
 function hostPage() {
   const done = snapshot.roles.filter(r=>r.status === 'closed').length;
-  return `${header()}<main class="container page">${demoNote()}${disconnected ? '<div id="connection-error" class="live-error" role="alert">Восстанавливаем подключение…</div>' : ''}<div class="page-heading"><div><h1>${esc(snapshot.title)}</h1><p>Шесть критериев. Независимые оценки. Общая картина.</p></div><div class="session-meta"><span class="badge">${code === 'demo' ? 'Демонстрация' : 'Общая встреча'}</span><span class="divider"></span><span class="row small muted">${icon('users')}${peopleLabel(snapshot.participants.length)}</span></div></div><div class="tabbar"><nav class="tabs" aria-label="Разделы сессии">${[['session','list','Встреча'],['ranking','trophy','Рейтинг ролей'],['criteria','settings','Критерии']].map(([t,ic,label])=>`<a href="?${new URLSearchParams({...(code!=='demo'?{s:code}:{}),tab:t})}" class="tab ${tab===t?'active':''}" data-tab="${t}" ${tab===t?'aria-current="page"':''}>${icon(ic)}${label}${t==='ranking'?`<span class="tab-count">${snapshot.leaderboard.length}</span>`:''}</a>`).join('')}</nav><span class="small muted">${done} из ${snapshot.roles.length} ролей оценено</span></div>${tab==='ranking'?leaderboard():tab==='criteria'?criteriaPage():hostWorkspace()}<footer class="bottom-bar"><span class="row">${icon('lock')}Оценки скрыты до закрытия голосования</span>${viewSwitcher()}<button class="btn btn-link" data-action="finish" ${snapshot.finished?'disabled':''}>${icon('trophy')}Завершить встречу</button></footer></main>`;
+  return `${header()}<main class="container page host-page">${demoRequested?demoNote():''}${disconnected?'<div id="connection-error" class="live-error" role="alert">Восстанавливаем подключение…</div>':''}<div class="page-heading"><div><h1>${esc(snapshot.title)}</h1><p>${peopleLabel(snapshot.participants.length)} · ${done} из ${snapshot.roles.length} ролей оценено</p></div>${snapshot.finished?'<button class="btn btn-primary" data-action="create">Начать новую встречу</button>':''}</div><div class="tabbar"><nav class="tabs" aria-label="Разделы встречи">${[['session','list','Управление'],['ranking','trophy','Рейтинг ролей']].map(([t,ic,label])=>`<a href="?${new URLSearchParams({...(code!=='demo'?{s:code}:{}),tab:t})}" class="tab ${tab===t?'active':''}" data-tab="${t}" ${tab===t?'aria-current="page"':''}>${icon(ic)}${label}</a>`).join('')}</nav></div>${tab==='ranking'?leaderboard():hostWorkspace()}<footer class="bottom-bar"><span class="small muted">Результаты появятся у участников после закрытия голосования.</span><button class="btn btn-link" data-action="finish" ${snapshot.finished?'disabled':''}>${icon('trophy')}Завершить встречу</button></footer></main>`;
 }
 function hostWorkspace() {
   const role = currentRole();
-  const done = snapshot.roles.filter(r=>r.status==='closed').length;
-  return `<div class="workspace"><aside class="role-nav" aria-label="Роли для оценки"><div class="section-label"><h2>Роли для оценки</h2><span class="badge">${snapshot.roles.length}</span></div><div class="role-list">${snapshot.roles.map((r,i)=>`<button type="button" class="role-item ${r.id===role?.id?'active':''}" data-role="${esc(r.id)}" ${snapshot.finished?'disabled':''} aria-pressed="${r.id===role?.id}"><span class="role-number">${r.status==='closed'?icon('check'):String(i+1).padStart(2,'0')}</span><span><strong>${esc(r.name)}</strong><small>${r.status==='open'?'Идёт голосование':r.status==='closed'?(snapshot.results[r.id]?.count?`${fmt(snapshot.results[r.id].score)} из 5`:'Нет ответов'):'Ещё не оценена'}</small></span></button>`).join('')}</div><button class="btn btn-link add-role" data-action="add-role" ${snapshot.finished?'disabled':''}>${icon('plus')}Добавить роль</button><div class="role-progress"><div class="row spread"><span>Прогресс сессии</span><span>${done}/${snapshot.roles.length}</span></div>${progress(done,snapshot.roles.length)}<p>Каждая роль оценивается по всем шести критериям.</p></div></aside><section class="evaluation" aria-label="Текущая роль"><div class="evaluation-head"><div class="row spread">${statusBadge(role)}<span class="small muted">Роль ${snapshot.roles.indexOf(role)+1} из ${snapshot.roles.length}</span></div><h2>${esc(role?.name || 'Добавьте первую роль')}</h2><p>${role?.status==='closed'?'Средние оценки участников по каждому критерию.':'Участники оценивают все критерии по шкале от 1 до 5.'}</p></div><div class="criterion-table-head"><span>Критерий оценки</span><span>${role?.status==='closed'?'Среднее / вес':'Вес'}</span></div><div class="criteria">${criterionRows(role)}</div>${role?.status==='closed' && snapshot.results[role.id]?.count?`<div class="score-summary"><div><strong>Итоговая оценка роли</strong><p class="small muted">С учётом весов шести критериев</p></div><span class="score-large">${fmt(snapshot.results[role.id].score)}</span></div>`:''}<div class="evaluation-foot">${icon('info')}Оценка поддерживает обсуждение и не заменяет профессиональное суждение.</div></section><aside class="session-rail">${controlBox()}${participants()}<div class="help-box"><h3>Один темп для всей встречи</h3><p>Только ведущий открывает голосование, показывает результаты и выбирает следующую роль.</p></div></aside></div>`;
+  return `<div class="workspace host-workspace"><aside class="role-nav" aria-label="Роли для оценки"><div class="section-label"><h2>Роли для оценки</h2><span class="badge">${snapshot.roles.length}</span></div><div class="role-list">${snapshot.roles.map((r,i)=>`<button type="button" class="role-item ${r.id===role?.id?'active':''}" data-role="${esc(r.id)}" ${snapshot.finished?'disabled':''} aria-pressed="${r.id===role?.id}"><span class="role-number">${r.status==='closed'?icon('check'):String(i+1).padStart(2,'0')}</span><span><strong>${esc(r.name)}</strong><small>${r.status==='open'?'Идёт голосование':r.status==='closed'?(snapshot.results[r.id]?.count?`${fmt(snapshot.results[r.id].score)} из 5`:'Нет ответов'):'Ещё не оценена'}</small></span></button>`).join('')}</div><button class="btn btn-link add-role" data-action="add-role" ${snapshot.finished?'disabled':''}>${icon('plus')}Добавить роль</button></aside><section class="host-main" aria-label="Текущая роль"><div class="evaluation"><div class="evaluation-head">${statusBadge(role)}<h2>${esc(role?.name||'Выберите роль')}</h2></div>${controlBox()}${role?.status==='closed'&&snapshot.results[role.id]?.count?`<div class="score-summary"><span>Итог роли</span><strong class="score-large">${fmt(snapshot.results[role.id].score)} <small>/ 5</small></strong></div>`:''}</div><details class="host-details" open><summary>Участники (${snapshot.participants.length})</summary>${participants()}</details><details class="host-details"><summary>Критерии и веса</summary>${criteriaPage()}</details></section></div>`;
 }
 function criterionRows(role, generic=false) {
   return CRITERIA.map((c,i)=>`<div class="criterion"><span class="criterion-icon">${icon(c.icon)}</span><div><h3>${esc(c.title)}</h3><p>${esc(c.description)}</p></div><div class="criterion-weight">${!generic && role?.status==='closed'?`<span class="result-average">${fmt(snapshot.results[role.id]?.averages[i])}</span><span class="small muted">${c.weight}%</span>`:`${c.weight}%`}</div></div>`).join('');
@@ -188,7 +206,7 @@ function controlBox() {
   if(role?.status==='open'){action='close';label='Закрыть и показать итог';ic='lock';hint='Результаты станут видны участникам';}
   if(role?.status==='closed'){action='next';label='Следующая роль';ic='arrow';hint='Голосование открывает ведущий';}
   if(snapshot.finished){action='ranking';label='Посмотреть рейтинг';ic='trophy';hint='Сессия завершена';}
-  return `<section class="control-box"><h2>${role?.status==='closed'?'Оценивание завершено':'Ответы участников'}</h2><div class="answer-count"><strong>${count}</strong><span>/ ${total}</span></div><p>${total ? `${count===total?'Все участники ответили':'Получено ответов'}`:'Пригласите участников в сессию'}</p>${progress(count,total)}<button class="btn" data-action="${action}" ${disconnected || !role?'disabled':''}>${icon(ic)}${label}</button><div class="control-hint">${hint}</div></section>`;
+  return `<section class="control-box"><h2>${role?.status==='closed'?'Оценивание завершено':'Ответы участников'}</h2><div class="answer-count"><strong>${count}</strong><span>/ ${total}</span></div><p>${total ? `${count===total?'Все участники ответили':'Получено ответов'}`:'Пригласите участников в сессию'}</p>${progress(count,total)}<button class="btn" data-action="${action}" ${busy || disconnected || !role?'disabled':''}>${icon(ic)}${busy?'Сохраняем…':label}</button><div class="control-hint">${hint}</div></section>`;
 }
 function participants() {
   return `<section class="participants"><div class="row spread"><h2>Участники</h2><span class="small muted">${snapshot.participants.length}</span></div>${snapshot.participants.length?snapshot.participants.map(p=>`<div class="person"><span class="person-info"><span class="avatar">${esc(p.name.slice(0,2).toLocaleUpperCase('ru'))}</span><span class="person-name">${esc(p.name)}</span></span><span class="person-status ${p.voted?'done':''}">${p.voted?'Ответил':currentRole()?.status==='open'?'Оценивает':'Ожидает'}</span></div>`).join(''):'<p class="participant-empty">Здесь появятся участники, когда присоединятся по ссылке и введут своё имя.</p>'}<button class="invite-link" data-action="invite" aria-label="Показать QR-код">${icon('qr')}Показать QR-код</button></section>`;
@@ -221,6 +239,7 @@ function presentPage() {
 }
 function render() {
   if (!profile) { $('#app').innerHTML = entryPage(); return; }
+  if (needsHostSetup()) { $('#app').innerHTML = hostSetup(); return; }
   if ((usesCurrentMeeting() && waitingForCurrent) || (!usesCurrentMeeting() && waitsForInvitation(profile, code, invitedToDemo))) { $('#app').innerHTML = waitingRoom(); return; }
   if(!snapshot) return;
   if (!isAdministrator(profile)) view = 'participant';
@@ -228,6 +247,7 @@ function render() {
   // Keep the voting form intact when other participants send their answers.
   const focused=document.activeElement; const focusName=focused?.getAttribute('name'); const selection=focused?.selectionStart; const inputValue=focused?.value;
   $('#app').innerHTML=view==='participant'?participantPage():view==='present'?presentPage():hostPage();
+  if(disconnected&&!$('#connection-error'))$('#app main')?.insertAdjacentHTML('afterbegin','<div id="connection-error" class="live-error" role="alert">Связь прервана. Восстанавливаем подключение…</div>');
   if(focusName){ const next=document.getElementsByName(focusName)[0]; if(next && next.type!=='radio'){if(inputValue!==undefined)next.value=inputValue;next.focus({preventScroll:true});if(typeof selection==='number')try{next.setSelectionRange(selection,selection);}catch{}} }
 }
 function joinUrl() { return siteUrl(location.href); }
@@ -252,12 +272,12 @@ async function toggleInviteFullscreen() {
 }
 async function act(action,roleId) {
   if(busy || !isHost())return;
-  busy=true;
+  busy=true;render();
   try {
     if(code==='demo'){const state=demoGet();transition(state,{action,roleId});demoSet(state);}
     else {await api(`sessions/${code}/action`,{token:hostToken(),action,roleId});await refresh(true);}
     render();
-  } catch(error){toast(error.message);} finally{busy=false;}
+  } catch(error){toast(error.message);} finally{busy=false;render();}
 }
 function createDialog() {
   if(!backend) return showDialog(`${dialogHeader('Онлайн-просмотр интерфейса')}<p>Здесь можно проверить экраны ведущего, участника и рейтинг. Голоса демонстрации сохраняются только в этом браузере.</p><p>Для совместной встречи нужно подключить базу сессий. После подключения участники смогут оценивать роли с разных телефонов.</p><div class="actions"><button class="btn btn-primary" data-action="close-dialog">Продолжить просмотр</button></div>`);
@@ -309,13 +329,14 @@ document.addEventListener('submit',async event=>{
       if(!isAdministrator(profile)&&automaticSession){code='demo';linkAccessKey='';snapshot=null;lastSignature='';}
       if(isAdministrator(profile)){
         if(code!=='demo'&&!hostToken()){code='demo';linkAccessKey='';snapshot=null;lastSignature='';}
+        restoreHostMeeting();
         route('host');
       }else route('participant');
       await refresh(true);
     } else if(form.id==='create-form'){
       if(!isAdministrator(profile))throw new Error('Начать встречу может только администратор.');
       const result=await api('sessions',{title:data.get('title'),roles:String(data.get('roles')).split(/\r?\n/).map(s=>s.trim()).filter(Boolean)});
-      code=result.code;linkAccessKey='';writeLocal(`rolelab-host-${code}`,result.token);if(result.inviteToken)writeLocal(`rolelab-invite-${code}`,result.inviteToken);$('#dialog').close();snapshot=null;lastSignature='';route('host');await refresh(true);
+      code=result.code;linkAccessKey='';writeLocal(`rolelab-host-${code}`,result.token);writeLocal(LAST_HOST_KEY,code);if(result.inviteToken)writeLocal(`rolelab-invite-${code}`,result.inviteToken);$('#dialog').close();snapshot=null;lastSignature='';route('host');await refresh(true);
     } else if(form.id==='join-form'){
       const name=String(data.get('name')).trim();if(!name)throw new Error('Введите ваше имя.');
       let person;
@@ -339,6 +360,7 @@ document.addEventListener('submit',async event=>{
 window.addEventListener('storage',event=>{if(event.key===DEMO_KEY&&code==='demo')refresh();});
 window.addEventListener('popstate',()=>{const query=new URLSearchParams(location.search);view=query.get('view')||'host';tab=query.get('tab')||'session';code=query.get('s')||'demo';linkAccessKey=query.get('key')||'';invitedToDemo=query.get('view')==='participant';automaticSession=!query.has('s')&&!invitedToDemo;waitingForCurrent=true;waitingError='';snapshot=null;lastSignature='';refresh(true);});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
+window.addEventListener('focus',()=>refresh());
 $('#dialog').addEventListener('close',()=>{if(document.fullscreenElement?.id==='invitation-screen')document.exitFullscreen().catch(()=>{});});
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&$('#dialog').open&&$('#dialog').classList.contains('invitation-dialog')){event.preventDefault();$('#dialog').close();}});
 document.addEventListener('fullscreenchange',()=>{
@@ -356,6 +378,7 @@ async function init(){
   } catch(error) { renderError(error.message);return; }
   if(!['host','participant','present'].includes(view))view='host';
   if(!['session','ranking','criteria'].includes(tab))tab='session';
-  await refresh(true);pollTimer=setInterval(()=>{if(!document.hidden&&!busy)refresh();},1500);
+  restoreHostMeeting();await refresh(true);
+  let lastPoll=0;pollTimer=setInterval(()=>{if(!busy&&(!document.hidden||Date.now()-lastPoll>=5000)){lastPoll=Date.now();refresh();}},1500);
 }
 init();

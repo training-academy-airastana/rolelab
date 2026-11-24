@@ -230,5 +230,18 @@ dialog .invitation-description { margin-top:var(--space-lg); font-size:clamp(16p
 .entry-footnote { margin-top:var(--space-2xl); color:var(--color-muted); font-size:12px; text-align:center; }
 .entry-page .form-group input { min-height:50px; }
 .entry-page .btn-primary { min-height:48px; }
+.host-setup { padding-block:var(--space-2xl); }
+.host-setup .form-group textarea { min-height:180px; }
+.host-page { max-width:1180px; }
+.host-workspace { grid-template-columns:280px minmax(0,1fr); }
+.host-main { display:flex; flex-direction:column; gap:var(--space-lg); min-width:0; }
+.host-main .control-box { border-radius:0; }
+.host-main .answer-count { margin-top:var(--space-sm); }
+.host-main .control-box .btn { min-height:48px; font-size:16px; }
+.host-details { border-bottom:1px solid var(--color-rule); padding-bottom:var(--space-md); }
+.host-details summary { cursor:pointer; font-weight:600; padding-block:var(--space-sm); }
+.host-details > .evaluation { margin-top:var(--space-sm); }
+@media(min-width:1600px) { .host-workspace { grid-template-columns:280px minmax(0,1fr); } }
+@media(max-width:760px) { .host-workspace { grid-template-columns:minmax(0,1fr); } .host-setup { padding-top:var(--space-lg); } }
 .header-actions .badge { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 @media(max-width:760px) { .header-actions [data-action="change-name"] span { display:none; } }
