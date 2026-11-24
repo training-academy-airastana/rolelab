@@ -35,6 +35,8 @@ const icons = {
 const icon = name => `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.chart}</svg>`;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const fmt = value => value == null ? '—' : value.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Meetings created before the English interface retain the old default title.
+const workshopTitle = value => value?.trim() === 'Калибровка бизнес-ролей' ? 'Business-Critical Roles Workshop' : value;
 const newId = () => crypto.randomUUID?.() || Array.from(crypto.getRandomValues(new Uint8Array(16)), n=>n.toString(16).padStart(2,'0')).join('');
 const peopleLabel = count => `${count} participant${count === 1 ? '' : 's'}`;
 const params = new URLSearchParams(location.search);
@@ -192,7 +194,7 @@ function hostSetup() {
 }
 function hostPage() {
   const done = snapshot.roles.filter(r=>r.status === 'closed').length;
-  return `${header()}<main class="container page host-page">${demoRequested?demoNote():''}${disconnected?'<div id="connection-error" class="live-error" role="alert">Reconnecting…</div>':''}<div class="page-heading"><div><h1>${esc(snapshot.title)}</h1><p>${peopleLabel(snapshot.participants.length)} · ${done} of ${snapshot.roles.length} roles scored</p></div>${snapshot.finished?'<button class="btn btn-primary" data-action="create">Start a new workshop</button>':''}</div><div class="tabbar"><nav class="tabs" aria-label="Workshop sections">${[['session','list','Facilitate'],['ranking','trophy','Prioritised role list']].map(([t,ic,label])=>`<a href="?${new URLSearchParams({...(code!=='demo'?{s:code}:{}),tab:t})}" class="tab ${tab===t?'active':''}" data-tab="${t}" ${tab===t?'aria-current="page"':''}>${icon(ic)}${label}</a>`).join('')}</nav></div>${tab==='ranking'?leaderboard():hostWorkspace()}<footer class="bottom-bar"><span class="small muted">Participants will see the results when scoring closes.</span><button class="btn btn-link" data-action="finish" ${snapshot.finished?'disabled':''}>${icon('trophy')}Finish workshop</button></footer></main>`;
+  return `${header()}<main class="container page host-page">${demoRequested?demoNote():''}${disconnected?'<div id="connection-error" class="live-error" role="alert">Reconnecting…</div>':''}<div class="page-heading"><div><h1>${esc(workshopTitle(snapshot.title))}</h1><p>${peopleLabel(snapshot.participants.length)} · ${done} of ${snapshot.roles.length} roles scored</p></div>${snapshot.finished?'<button class="btn btn-primary" data-action="create">Start a new workshop</button>':''}</div><div class="tabbar"><nav class="tabs" aria-label="Workshop sections">${[['session','list','Facilitate'],['ranking','trophy','Prioritised role list']].map(([t,ic,label])=>`<a href="?${new URLSearchParams({...(code!=='demo'?{s:code}:{}),tab:t})}" class="tab ${tab===t?'active':''}" data-tab="${t}" ${tab===t?'aria-current="page"':''}>${icon(ic)}${label}</a>`).join('')}</nav></div>${tab==='ranking'?leaderboard():hostWorkspace()}<footer class="bottom-bar"><span class="small muted">Participants will see the results when scoring closes.</span><button class="btn btn-link" data-action="finish" ${snapshot.finished?'disabled':''}>${icon('trophy')}Finish workshop</button></footer></main>`;
 }
 function hostWorkspace() {
   const role = currentRole();
