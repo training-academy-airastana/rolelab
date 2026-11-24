@@ -13,7 +13,7 @@ export function qrSvg(url, id = 'invitation-qr') {
     scalable: true,
     cellSize: 4,
     margin: 16,
-    title: { text: 'QR-код для входа в Rolelab', id: `${id}-title` },
+    title: { text: 'QR code to join Rolelab', id: `${id}-title` },
     alt: { text: url, id: `${id}-description` },
   });
 }

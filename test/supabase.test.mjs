@@ -4,6 +4,14 @@ import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { invitationUrl, siteUrl } from '../public/site-paths.mjs';
 import { createSupabaseApi, validateSupabaseConfig } from '../public/supabase-api.mjs';
+import { errorMessage } from '../public/error-messages.mjs';
+
+test('existing database errors are displayed in English', () => {
+  assert.equal(errorMessage('Ваши оценки уже приняты.'),'Your scores have already been submitted.');
+  assert.equal(errorMessage('Управление доступно только ведущему.'),'Only the facilitator can control this workshop.');
+  assert.equal(errorMessage('Scoring is closed.'),'Scoring is closed.');
+  assert.equal(/[А-Яа-яЁё]/.test(errorMessage('Новая ошибка базы')),false);
+});
 
 test('GitHub Pages invitations preserve the repository prefix and exclude host tokens', () => {
   const url = invitationUrl('https://example.github.io/rolelab/?s=123456&tab=ranking', '123456', 'invite-only');
