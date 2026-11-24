@@ -2,6 +2,7 @@ import { CRITERIA, publicSnapshot, submitVote, transition } from './domain.mjs';
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './config.mjs';
 import { createSupabaseApi, validateSupabaseConfig } from './supabase-api.mjs';
 import { invitationUrl } from './site-paths.mjs';
+import { entryProfile, isAdministrator, waitsForInvitation } from './entry.mjs';
 
 const $ = selector => document.querySelector(selector);
 const icons = {
@@ -34,6 +35,11 @@ const fmt = value => value == null ? '—' : value.toLocaleString('ru-RU', { min
 const newId = () => crypto.randomUUID?.() || Array.from(crypto.getRandomValues(new Uint8Array(16)), n=>n.toString(16).padStart(2,'0')).join('');
 const peopleLabel = count => `${count} ${{one:'участник',few:'участника',many:'участников',other:'участника'}[new Intl.PluralRules('ru').select(count)]}`;
 const params = new URLSearchParams(location.search);
+const ENTRY_KEY = 'rolelab-entry-v1';
+let profile = null;
+try { const saved = JSON.parse(sessionStorage.getItem(ENTRY_KEY)); if (saved?.name) profile = entryProfile(saved.name); } catch {}
+let invitedToDemo = params.get('view') === 'participant';
+let joining = null;
 let view = params.get('view') || 'host';
 let tab = params.get('tab') || 'session';
 let code = params.get('s') || 'demo';
@@ -56,42 +62,73 @@ function demoInitial() {
 }
 function demoGet() { return readLocal(DEMO_KEY) || demoInitial(); }
 function demoSet(state) { writeLocal(DEMO_KEY, state); snapshot = publicSnapshot(state); lastSignature = JSON.stringify(snapshot); }
-function identity() { return readLocal(`rolelab-person-${code}`); }
+function identity() { const person = readLocal(`rolelab-person-${code}`); return isAdministrator(profile) || person?.name === profile?.name ? person : null; }
 function hostToken() { return readLocal(`rolelab-host-${code}`); }
 function inviteToken() { return readLocal(`rolelab-invite-${code}`) || linkAccessKey; }
-function accessToken() { return hostToken() || identity()?.token || inviteToken() || ''; }
-function isHost() { return code === 'demo' || !!hostToken(); }
+function accessToken() { return (isAdministrator(profile) ? hostToken() : '') || identity()?.token || inviteToken() || ''; }
+function isHost() { return isAdministrator(profile) && (code === 'demo' || !!hostToken()); }
 function currentRole() { return snapshot?.roles.find(r => r.id === snapshot.currentRoleId); }
 function route(nextView, nextTab = 'session') {
+  if (!isAdministrator(profile)) nextView = 'participant';
+  if (code === 'demo' && nextView === 'participant' && isAdministrator(profile)) invitedToDemo = true;
   view = nextView; tab = nextTab;
   const url = new URL(location.href); url.search = ''; if (code !== 'demo') url.searchParams.set('s', code);
   if (linkAccessKey && code !== 'demo') url.searchParams.set('key', linkAccessKey);
-  if (view !== 'host') url.searchParams.set('view', view);
+  if (view !== 'host' && (code !== 'demo' || invitedToDemo)) url.searchParams.set('view', view);
   if (tab !== 'session') url.searchParams.set('tab', tab);
   history.pushState({}, '', url); render();
 }
 function toast(message) { const el = $('#toast'); el.textContent = message; el.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('visible'), 4500); }
+function entryHeader() {
+  return `<header class="topbar"><div class="container topbar-inner"><a class="brand" href="./" aria-label="Rolelab, главная"><span class="brand-mark">${icon('chart')}</span>Rolelab</a>${profile?`<div class="header-actions"><span class="badge">${esc(profile.name)}</span><button class="btn btn-link" data-action="change-name" aria-label="Сменить имя">${icon('users')}<span>Сменить имя</span></button></div>`:''}</div></header>`;
+}
+function entryPage() {
+  return `${entryHeader()}<main class="mobile-page entry-page"><h1>Давайте познакомимся.</h1><p class="entry-intro">Введите имя, чтобы присоединиться к оценке бизнес-ролей.</p><form id="entry-form" class="join-form"><label class="form-group" for="entry-name">Ваше имя<input id="entry-name" name="name" autocomplete="given-name" maxlength="60" required placeholder="Как к вам обращаться" aria-describedby="entry-hint"></label><p class="form-hint" id="entry-hint">Так вас увидит ведущий встречи.</p><p class="form-error" id="form-error" role="alert"></p><button class="btn btn-primary btn-wide" type="submit">Войти ${icon('arrow')}</button></form><p class="entry-footnote">Калибровка бизнес-ролей</p></main>`;
+}
+function waitingRoom() {
+  return `${entryHeader()}<main class="mobile-page"><div class="wait-block"><div class="success-icon">${icon('clock')}</div><p class="entry-greeting">${esc(profile.name)}, вы готовы.</p><h1>Ждём начала сессии</h1><p class="entry-intro">Ведущий готовит встречу. Оставайтесь на этой странице.</p></div><p class="entry-footnote">Оценивание откроет ведущий.</p></main>`;
+}
 async function api(path, data) {
   if (cloudApi) return cloudApi(path, data);
   const response = await fetch(new URL(`./api/${path}`, location.href), { method: data ? 'POST' : 'GET', headers: data ? { 'Content-Type': 'application/json' } : {}, body: data ? JSON.stringify(data) : undefined, signal: AbortSignal.timeout(10000) });
   const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Не удалось выполнить запрос.'); return result;
 }
 async function refresh(force = false) {
+  if (!profile) { if (!$('#entry-form')) render(); return; }
+  if (waitsForInvitation(profile, code, invitedToDemo)) { if (force || !$('#waiting-room')) render(); return; }
+  const entry = profile; const sessionCode = code;
   try {
-    const next = code === 'demo' ? publicSnapshot(demoGet()) : await api(`sessions/${encodeURIComponent(code)}`);
+    let next = code === 'demo' ? publicSnapshot(demoGet()) : await api(`sessions/${encodeURIComponent(code)}`);
+    if (profile !== entry || code !== sessionCode) return;
+    if (!isAdministrator(profile) && code === 'demo' && invitedToDemo && !next.participants.some(p=>p.id===identity()?.id)) {
+      const state=demoGet();const person={id:newId(),token:newId(),name:profile.name};state.participants.push(person);
+      writeLocal(`rolelab-person-${code}`,person);demoSet(state);next=publicSnapshot(state);
+    }
+    if (!isAdministrator(profile) && code !== 'demo' && !next.finished && !next.participants.some(p => p.id === identity()?.id)) {
+      if (!joining) joining = api(`sessions/${sessionCode}/join`, { name: entry.name }).then(person => {
+        if (profile === entry && code === sessionCode) writeLocal(`rolelab-person-${sessionCode}`, person);
+      });
+      const request = joining;
+      try { await request; } finally { if (joining === request) joining = null; }
+      if (profile !== entry || code !== sessionCode) return;
+      next = await api(`sessions/${encodeURIComponent(code)}`);
+    }
+    if (profile !== entry || code !== sessionCode) return;
     const signature = JSON.stringify(next);
     if (force || signature !== lastSignature || disconnected) { snapshot = next; lastSignature = signature; disconnected = false; render(); }
-  } catch (error) { if (!disconnected || !snapshot) { disconnected = true; renderError(error.message); } }
+  } catch (error) { if (profile === entry && code === sessionCode && (!disconnected || !snapshot)) { disconnected = true; renderError(error.message); } }
 }
 function renderError(message) {
   if (!snapshot) $('#app').innerHTML = `${header()}<main class="container page"><div class="empty">${icon('globe')}<h1>Не удалось открыть сессию</h1><p>${esc(message)}</p><button class="btn btn-primary" data-action="retry">Попробовать снова</button><a class="btn" href="./">На главную</a></div></main>`;
   else { render(); const errorEl = $('#connection-error'); if (errorEl) errorEl.textContent = 'Связь прервана. Восстанавливаем подключение; отправка временно недоступна.'; }
 }
 function header() {
-  return `<header class="topbar"><div class="container topbar-inner"><a class="brand" href="./" aria-label="Rolelab, главная"><span class="brand-mark">${icon('chart')}</span>Rolelab<span class="brand-sub">Совместная оценка критичности ролей</span></a><div class="header-actions">${code === 'demo' ? '<span class="badge">Демо-интерфейс</span>' : `<span class="badge ${disconnected ? 'badge-amber' : 'badge-green'}">${disconnected ? 'Переподключение' : 'Подключено'}</span>`}${view === 'host' ? `<button class="btn" data-action="present" aria-label="Открыть общий экран">${icon('monitor')}<span>Общий экран</span></button><button class="btn" data-action="invite" aria-label="Пригласить участников">${icon('link')}<span>Пригласить</span></button>` : `<button class="btn btn-link" data-action="${isHost() ? 'host-view' : 'invite'}">${icon(isHost() ? 'settings' : 'link')}<span>${isHost() ? 'Ведущий' : 'Пригласить'}</span></button>`}</div></div></header>`;
+  if (!isAdministrator(profile)) return entryHeader();
+  return `<header class="topbar"><div class="container topbar-inner"><a class="brand" href="./" aria-label="Rolelab, главная"><span class="brand-mark">${icon('chart')}</span>Rolelab<span class="brand-sub">Совместная оценка критичности ролей</span></a><div class="header-actions"><button class="btn btn-link" data-action="change-name" aria-label="Сменить имя">${icon('users')}<span>Сменить имя</span></button>${code === 'demo' ? '<span class="badge">Демо-интерфейс</span>' : `<span class="badge ${disconnected ? 'badge-amber' : 'badge-green'}">${disconnected ? 'Переподключение' : 'Подключено'}</span>`}${view === 'host' ? `<button class="btn" data-action="present" aria-label="Открыть общий экран">${icon('monitor')}<span>Общий экран</span></button><button class="btn" data-action="invite" aria-label="Пригласить участников">${icon('link')}<span>Пригласить</span></button>` : `<button class="btn btn-link" data-action="${isHost() ? 'host-view' : 'invite'}">${icon(isHost() ? 'settings' : 'link')}<span>${isHost() ? 'Ведущий' : 'Пригласить'}</span></button>`}</div></div></header>`;
 }
 function demoNote() { return code === 'demo' ? `<div class="demo-note"><span><strong>Режим знакомства.</strong> Роли приведены для примера. <button class="btn btn-link" data-action="reset-demo">Сбросить демо</button></span><button class="btn" data-action="create">Создать сессию ${icon('plus')}</button></div>` : ''; }
 function viewSwitcher() {
+  if (!isAdministrator(profile)) return '';
   return `<div class="view-switch" aria-label="Вид интерфейса">${[['host','settings','Ведущий'],['participant','phone','Участник'],['present','monitor','Общий экран']].map(([v,ic,title])=>`<button type="button" class="${view === v ? 'active' : ''}" data-view="${v}" aria-pressed="${view === v}">${icon(ic)}${title}</button>`).join('')}</div>`;
 }
 function statusBadge(role) {
@@ -135,6 +172,10 @@ function participantPage() {
   const person=identity(); const role=currentRole();
   const known=person && snapshot.participants.some(p=>p.id===person.id);
   const voted=known && snapshot.participants.find(p=>p.id===person.id)?.voted;
+  if (!known && profile && !isAdministrator(profile)) {
+    if (snapshot.finished) return `${entryHeader()}<main class="mobile-page"><span class="badge badge-green">Сессия завершена</span><h1>Результаты встречи</h1>${leaderboard()}</main>`;
+    return `${entryHeader()}<main class="mobile-page"><div class="wait-block"><h1>Присоединяемся к сессии</h1><p class="entry-intro">${esc(profile.name)}, ваше имя уже сохранено.</p></div></main>`;
+  }
   if(!known) return `${header()}<main class="mobile-page">${code==='demo'?'<span class="badge">Проверка мобильного интерфейса</span>':''}<h1>Ваше мнение имеет вес.</h1><p class="muted" style="margin-top:var(--space-sm)">Присоединитесь к оценке бизнес-ролей.</p><form id="join-form" class="join-form"><label class="form-group">Ваше имя<input name="name" autocomplete="given-name" maxlength="60" required placeholder="Как к вам обращаться"></label><p class="form-hint">Имя увидит ведущий. Оценки показываются в общей статистике.</p><p class="form-error" id="form-error" role="alert"></p><button class="btn btn-primary btn-wide" type="submit">Присоединиться ${icon('arrow')}</button></form>${code==='demo'?`<div style="margin-top:var(--space-xl)">${viewSwitcher()}</div>`:''}</main>`;
   if(snapshot.finished) return `${header()}<main class="mobile-page"><span class="badge badge-green">Сессия завершена</span><h1>Спасибо за ваши оценки.</h1>${leaderboard()}${code==='demo'?viewSwitcher():''}</main>`;
   if(role?.status==='closed') return `${header()}<main class="mobile-page"><div class="row spread"><span class="small muted">${esc(person.name)}</span>${statusBadge(role)}</div><div class="evaluation"><div class="evaluation-head"><h2>${esc(role.name)}</h2><p>Результат совместной оценки</p></div>${snapshot.results[role.id]?.count?`<div class="score-summary"><span>Итог из 5</span><strong class="score-large">${fmt(snapshot.results[role.id].score)}</strong></div><div class="criteria">${CRITERIA.map((c,i)=>`<div class="criterion-result"><span>${esc(c.title)}</span><strong>${fmt(snapshot.results[role.id].averages[i])}</strong></div>`).join('')}</div>`:'<div class="empty"><p>По этой роли нет ответов.</p></div>'}</div><p class="small muted" style="margin-top:var(--space-lg);text-align:center">Ведущий выберет следующую роль. Страница обновится автоматически.</p>${code==='demo'?`<div style="margin-top:var(--space-xl)">${viewSwitcher()}</div>`:''}</main>`;
@@ -147,7 +188,10 @@ function presentPage() {
   return `${header()}<main class="present-page">${code==='demo'?'<span class="badge">Демонстрация общего экрана</span>':''}${snapshot.finished?leaderboard():`<div class="present-role">${statusBadge(role)}<h1 style="margin-top:var(--space-lg)">${esc(role?.name||'Ожидаем начала сессии')}</h1></div><div class="present-grid"><section><div class="criteria">${criterionRows(role)}</div></section><aside><div class="present-count">${snapshot.currentCount}<small> / ${snapshot.participants.length}</small></div><p class="muted">участников отправили оценки</p>${progress(snapshot.currentCount,snapshot.participants.length)}${role?.status==='closed'&&snapshot.results[role.id]?.count?`<div style="margin-top:var(--space-xl)"><span class="small muted">Итог роли из 5</span><p class="score-large">${fmt(snapshot.results[role.id].score)}</p></div>`:''}<div class="present-invite"><p class="small muted">Присоединяйтесь с телефона</p><strong>${code==='demo'?'ДЕМО':esc(code)}</strong><p class="join-url">${esc(joinUrl())}</p></div></aside></div>`}<footer class="bottom-bar"><span>Калибровка бизнес-ролей</span>${code==='demo'||isHost()?viewSwitcher():''}</footer></main>`;
 }
 function render() {
+  if (!profile) { $('#app').innerHTML = entryPage(); return; }
+  if (waitsForInvitation(profile, code, invitedToDemo)) { $('#app').innerHTML = waitingRoom(); $('#app main').id = 'waiting-room'; return; }
   if(!snapshot) return;
+  if (!isAdministrator(profile)) view = 'participant';
   if(!isHost()&&view==='host') view='participant';
   // Keep the voting form intact when other participants send their answers.
   const focused=document.activeElement; const focusName=focused?.getAttribute('name'); const selection=focused?.selectionStart; const inputValue=focused?.value;
@@ -159,7 +203,7 @@ function showDialog(content) { const dialog=$('#dialog'); dialog.innerHTML=conte
 function dialogHeader(title) { return `<div class="dialog-title"><h2>${title}</h2><button class="btn btn-link icon-btn" data-action="close-dialog" aria-label="Закрыть">${icon('close')}</button></div>`; }
 async function copy(text) { try { await navigator.clipboard.writeText(text); toast('Ссылка скопирована'); } catch { showDialog(`${dialogHeader('Ссылка для участников')}<p>Скопируйте ссылку и отправьте участникам.</p><div class="copy-field">${esc(text)}</div>`); } }
 async function act(action,roleId) {
-  if(busy)return;
+  if(busy || !isHost())return;
   busy=true;
   try {
     if(code==='demo'){const state=demoGet();transition(state,{action,roleId});demoSet(state);}
@@ -182,6 +226,11 @@ document.addEventListener('click',async event=>{
   if(el.dataset.tab){event.preventDefault();route('host',el.dataset.tab);return;}
   if(el.dataset.role){await act('select',el.dataset.role);return;}
   const action=el.dataset.action;
+  if(action==='change-name'){
+    profile=null;joining=null;voteDraft={};try{sessionStorage.removeItem(ENTRY_KEY);}catch{}
+    $('#dialog').close();render();return;
+  }
+  if(!profile || (!isAdministrator(profile) && !['retry','invite','export','close-dialog'].includes(action)))return;
   if(action==='close-dialog')$('#dialog').close();
   else if(action==='create')createDialog();
   else if(action==='reset-demo')showDialog(`${dialogHeader('Начать демонстрацию заново?')}<p>Примеры оценок и участников будут очищены только в этом браузере.</p><div class="actions"><button class="btn" data-action="close-dialog">Отмена</button><button class="btn btn-primary" data-action="confirm-reset">Начать заново</button></div>`);
@@ -201,11 +250,19 @@ document.addEventListener('click',async event=>{
 });
 document.addEventListener('change',event=>{if(event.target.closest('#vote-form')){const form=$('#vote-form');voteDraft[form.dataset.key]=CRITERIA.map((_,i)=>Number(new FormData(form).get(`score${i}`))||null);}});
 document.addEventListener('submit',async event=>{
-  const form=event.target;if(!['create-form','join-form','vote-form','add-role-form'].includes(form.id))return;event.preventDefault();if(busy)return;
+  const form=event.target;if(!['entry-form','create-form','join-form','vote-form','add-role-form'].includes(form.id))return;event.preventDefault();if(busy)return;
   const button=form.querySelector('[type="submit"]');const originalLabel=button.innerHTML;button.disabled=true;button.textContent='Сохраняем…';busy=true;
   try {
     const data=new FormData(form);
-    if(form.id==='create-form'){
+    if(form.id==='entry-form'){
+      profile=entryProfile(data.get('name'));try{sessionStorage.setItem(ENTRY_KEY,JSON.stringify(profile));}catch{}
+      if(isAdministrator(profile)){
+        if(code!=='demo'&&!hostToken()){code='demo';linkAccessKey='';snapshot=null;lastSignature='';}
+        route('host');
+      }else route('participant');
+      await refresh(true);
+    } else if(form.id==='create-form'){
+      if(!isAdministrator(profile))throw new Error('Создать сессию может только администратор.');
       const result=await api('sessions',{title:data.get('title'),roles:String(data.get('roles')).split(/\r?\n/).map(s=>s.trim()).filter(Boolean)});
       code=result.code;linkAccessKey='';writeLocal(`rolelab-host-${code}`,result.token);if(result.inviteToken)writeLocal(`rolelab-invite-${code}`,result.inviteToken);$('#dialog').close();snapshot=null;lastSignature='';route('host');await refresh(true);
     } else if(form.id==='join-form'){
@@ -219,6 +276,7 @@ document.addEventListener('submit',async event=>{
       if(code==='demo'){const state=demoGet();submitVote(state,vote);demoSet(state);}else await api(`sessions/${code}/vote`,vote);
       delete voteDraft[form.dataset.key];await refresh(true);
     } else if(form.id==='add-role-form'){
+      if(!isAdministrator(profile))throw new Error('Добавить роль может только администратор.');
       const name=String(data.get('role')).trim();if(!name)throw new Error('Введите название роли.');
       if(code==='demo'){const state=demoGet();if(state.finished)throw new Error('Сессия завершена.');state.roles.push({id:newId(),name,status:'pending',round:1});demoSet(state);}else await api(`sessions/${code}/roles`,{token:hostToken(),name});
       $('#dialog').close();await refresh(true);
@@ -228,7 +286,7 @@ document.addEventListener('submit',async event=>{
   finally{busy=false;if(button.isConnected){button.disabled=false;button.innerHTML=originalLabel;}}
 });
 window.addEventListener('storage',event=>{if(event.key===DEMO_KEY&&code==='demo')refresh();});
-window.addEventListener('popstate',()=>{const query=new URLSearchParams(location.search);view=query.get('view')||'host';tab=query.get('tab')||'session';code=query.get('s')||'demo';linkAccessKey=query.get('key')||'';snapshot=null;lastSignature='';refresh(true);});
+window.addEventListener('popstate',()=>{const query=new URLSearchParams(location.search);view=query.get('view')||'host';tab=query.get('tab')||'session';code=query.get('s')||'demo';linkAccessKey=query.get('key')||'';invitedToDemo=query.get('view')==='participant';snapshot=null;lastSignature='';refresh(true);});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
 async function init(){
   try {

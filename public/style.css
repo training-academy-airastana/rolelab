@@ -208,3 +208,11 @@ dialog .actions { margin-top:var(--space-lg); justify-content:flex-end; }
 @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; } }
 @media(pointer:coarse) { .btn,.tab,.icon-btn,.view-switch button,.invite-link { min-height:48px; } .icon-btn { min-width:48px; } }
 @media(max-width:760px) { .header-actions .btn-link span { display:inline; } }
+.entry-page { padding-top:var(--space-3xl); }
+.entry-intro { margin-top:var(--space-md); color:var(--color-muted); font-size:16px; }
+.entry-greeting { margin-bottom:var(--space-lg); color:var(--color-ink); font-size:16px; overflow-wrap:anywhere; }
+.entry-footnote { margin-top:var(--space-2xl); color:var(--color-muted); font-size:12px; text-align:center; }
+.entry-page .form-group input { min-height:50px; }
+.entry-page .btn-primary { min-height:48px; }
+.header-actions .badge { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+@media(max-width:760px) { .header-actions [data-action="change-name"] span { display:none; } }
