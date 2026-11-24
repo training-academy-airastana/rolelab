@@ -1,0 +1,8 @@
+data/
+node_modules/
+.artifacts/
+*.tar.gz
+dist/
+.env
+.env.*
+!.env.example
