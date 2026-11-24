@@ -1,4 +1,5 @@
-import { cp, mkdir, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { validateSupabaseConfig } from '../public/supabase-api.mjs';
@@ -12,5 +13,12 @@ if (process.argv.includes('--require-supabase') && !configured) throw new Error(
 await mkdir(path.join(root, 'dist'), { recursive: true });
 await cp(path.join(root, 'public'), path.join(root, 'dist'), { recursive: true });
 await writeFile(path.join(root, 'dist', 'config.mjs'), `export const SUPABASE_URL = ${JSON.stringify(url)};\nexport const SUPABASE_PUBLISHABLE_KEY = ${JSON.stringify(key)};\n`);
+const assets = ['app.js', 'style.css', 'tokens.css'];
+const hash = createHash('sha256');
+for (const asset of assets) hash.update(await readFile(path.join(root, 'dist', asset)));
+const version = hash.digest('hex').slice(0,12);
+let html = await readFile(path.join(root, 'dist', 'index.html'), 'utf8');
+for (const asset of assets) html = html.replaceAll(`./${asset}`, `./${asset}?v=${version}`);
+await writeFile(path.join(root, 'dist', 'index.html'), html);
 await writeFile(path.join(root, 'dist', '.nojekyll'), '');
 console.log(configured ? 'Built GitHub Pages site with Supabase.' : 'Built demo interface; Supabase is not configured.');
