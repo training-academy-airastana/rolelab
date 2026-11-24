@@ -2,13 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
-import { invitationUrl } from '../public/site-paths.mjs';
+import { invitationUrl, siteUrl } from '../public/site-paths.mjs';
 import { createSupabaseApi, validateSupabaseConfig } from '../public/supabase-api.mjs';
 
 test('GitHub Pages invitations preserve the repository prefix and exclude host tokens', () => {
   const url = invitationUrl('https://example.github.io/rolelab/?s=123456&tab=ranking', '123456', 'invite-only');
   assert.equal(url, 'https://example.github.io/rolelab/?s=123456&key=invite-only&view=participant');
   assert.equal(invitationUrl('http://localhost:4173/', 'demo'), 'http://localhost:4173/?view=participant');
+  assert.equal(siteUrl('https://example.github.io/rolelab/?s=123456&key=private-key&view=host#results'), 'https://example.github.io/rolelab/');
 });
 test('browser config accepts publishable keys and rejects privileged keys', () => {
   assert.equal(validateSupabaseConfig('', ''), false);

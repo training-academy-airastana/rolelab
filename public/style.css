@@ -196,6 +196,22 @@ dialog::backdrop { background:var(--color-overlay); }
 dialog .dialog-title { display:flex; justify-content:space-between; align-items:center; gap:var(--space-md); }
 dialog p { margin-top:var(--space-sm); color:var(--color-muted); font-size:14px; }
 dialog .actions { margin-top:var(--space-lg); justify-content:flex-end; }
+.invitation-dialog[open] { inset:0; margin:0; width:100%; height:100dvh; max-width:none; max-height:none; padding:0; border-radius:0; overflow:auto; }
+.invitation-screen { display:flex; flex-direction:column; min-height:100dvh; padding:clamp(16px,3vw,48px); background:var(--color-surface); }
+.invitation-screen:fullscreen { height:100dvh; overflow:auto; }
+.invitation-top { display:flex; align-items:center; justify-content:space-between; gap:var(--space-md); }
+.invitation-body { flex:1; display:grid; grid-template-columns:minmax(0,1.15fr) minmax(280px,1fr); align-items:center; gap:clamp(24px,5vw,80px); width:min(1280px,100%); margin:auto; padding-block:var(--space-lg); }
+.qr-code { width:min(66dvh,100%); justify-self:center; background:var(--color-surface); }
+.qr-code svg { display:block; width:100%; height:auto; }
+.invitation-info h1 { margin-top:var(--space-md); font-size:clamp(28px,3.6vw,56px); line-height:1.15; }
+dialog .invitation-description { margin-top:var(--space-lg); font-size:clamp(16px,1.6vw,21px); }
+.invitation-share { margin-top:var(--space-2xl); }
+.invitation-share .form-group { margin-bottom:var(--space-sm); }
+.invitation-share input { font-size:14px; }
+.invitation-feedback { min-height:42px; }
+.present-qr { width:min(180px,100%); margin-block:var(--space-sm); }
+.present-qr svg { display:block; width:100%; height:auto; }
+@media(max-width:760px) { .invitation-body { grid-template-columns:minmax(0,1fr); gap:var(--space-md); text-align:center; } .qr-code { width:min(70vw,42dvh,380px); } .invitation-info h1 { font-size:28px; } .invitation-share { margin-top:var(--space-lg); } .invitation-share .form-group { text-align:left; } .invitation-top .btn span { display:none; } }
 .copy-field { background:var(--color-paper); border-radius:var(--radius-sm); padding:var(--space-md); margin-top:var(--space-lg); overflow-wrap:anywhere; font-size:14px; }
 .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); max-width:calc(100% - 32px); background:var(--color-ink-deep); color:var(--color-on-accent); border-radius:var(--radius-md); padding:var(--space-sm) var(--space-lg); box-shadow:0 8px 24px var(--color-shadow); font-size:14px; z-index:500; opacity:0; pointer-events:none; }
 .toast.visible { opacity:1; }

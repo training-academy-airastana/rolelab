@@ -1,7 +1,8 @@
 import { CRITERIA, publicSnapshot, submitVote, transition } from './domain.mjs';
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './config.mjs';
 import { createSupabaseApi, validateSupabaseConfig } from './supabase-api.mjs';
-import { invitationUrl } from './site-paths.mjs';
+import { siteUrl } from './site-paths.mjs';
+import { qrSvg } from './qr.mjs';
 import { entryProfile, isAdministrator, waitsForInvitation } from './entry.mjs';
 
 const $ = selector => document.querySelector(selector);
@@ -26,6 +27,7 @@ const icons = {
   copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/>',
   download: '<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>',
   close: '<path d="m6 6 12 12M6 18 18 6"/>',
+  qr: '<path d="M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM15 15h2v2h-2zM21 15v6h-6m2-10v2m-6 2h2m-2 4v2"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10h.01"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a19 19 0 0 1 0 18 19 19 0 0 1 0-18Z"/>',
 };
@@ -154,7 +156,7 @@ function renderError(message) {
 }
 function header() {
   if (!isAdministrator(profile)) return entryHeader();
-  return `<header class="topbar"><div class="container topbar-inner"><a class="brand" href="./" aria-label="Rolelab, главная"><span class="brand-mark">${icon('chart')}</span>Rolelab<span class="brand-sub">Совместная оценка критичности ролей</span></a><div class="header-actions"><button class="btn btn-link" data-action="change-name" aria-label="Сменить имя">${icon('users')}<span>Сменить имя</span></button>${code === 'demo' ? '<span class="badge">Демо-интерфейс</span>' : `<span class="badge ${disconnected ? 'badge-amber' : 'badge-green'}">${disconnected ? 'Переподключение' : 'Подключено'}</span>`}${view === 'host' ? `<button class="btn" data-action="present" aria-label="Открыть общий экран">${icon('monitor')}<span>Общий экран</span></button><button class="btn" data-action="invite" aria-label="Пригласить участников">${icon('link')}<span>Пригласить</span></button>` : `<button class="btn btn-link" data-action="${isHost() ? 'host-view' : 'invite'}">${icon(isHost() ? 'settings' : 'link')}<span>${isHost() ? 'Ведущий' : 'Пригласить'}</span></button>`}</div></div></header>`;
+  return `<header class="topbar"><div class="container topbar-inner"><a class="brand" href="./" aria-label="Rolelab, главная"><span class="brand-mark">${icon('chart')}</span>Rolelab<span class="brand-sub">Совместная оценка критичности ролей</span></a><div class="header-actions"><button class="btn btn-link" data-action="change-name" aria-label="Сменить имя">${icon('users')}<span>Сменить имя</span></button>${code === 'demo' ? '<span class="badge">Демо-интерфейс</span>' : `<span class="badge ${disconnected ? 'badge-amber' : 'badge-green'}">${disconnected ? 'Переподключение' : 'Подключено'}</span>`}${view === 'host' ? `<button class="btn" data-action="present" aria-label="Открыть общий экран">${icon('monitor')}<span>Общий экран</span></button><button class="btn" data-action="invite" aria-label="Показать QR-код">${icon('qr')}<span>QR-код</span></button>` : `<button class="btn btn-link" data-action="${isHost() ? 'host-view' : 'invite'}">${icon(isHost() ? 'settings' : 'link')}<span>${isHost() ? 'Ведущий' : 'Пригласить'}</span></button>`}</div></div></header>`;
 }
 function demoNote() { return code === 'demo' ? `<div class="demo-note"><span><strong>Режим знакомства.</strong> Роли приведены для примера. <button class="btn btn-link" data-action="reset-demo">Сбросить демо</button></span><button class="btn" data-action="create">Начать встречу ${icon('plus')}</button></div>` : ''; }
 function viewSwitcher() {
@@ -189,7 +191,7 @@ function controlBox() {
   return `<section class="control-box"><h2>${role?.status==='closed'?'Оценивание завершено':'Ответы участников'}</h2><div class="answer-count"><strong>${count}</strong><span>/ ${total}</span></div><p>${total ? `${count===total?'Все участники ответили':'Получено ответов'}`:'Пригласите участников в сессию'}</p>${progress(count,total)}<button class="btn" data-action="${action}" ${disconnected || !role?'disabled':''}>${icon(ic)}${label}</button><div class="control-hint">${hint}</div></section>`;
 }
 function participants() {
-  return `<section class="participants"><div class="row spread"><h2>Участники</h2><span class="small muted">${snapshot.participants.length}</span></div>${snapshot.participants.length?snapshot.participants.map(p=>`<div class="person"><span class="person-info"><span class="avatar">${esc(p.name.slice(0,2).toLocaleUpperCase('ru'))}</span><span class="person-name">${esc(p.name)}</span></span><span class="person-status ${p.voted?'done':''}">${p.voted?'Ответил':currentRole()?.status==='open'?'Оценивает':'Ожидает'}</span></div>`).join(''):'<p class="participant-empty">Здесь появятся участники, когда присоединятся по ссылке и введут своё имя.</p>'}<button class="invite-link" data-action="invite" aria-label="Пригласить участников">${icon('link')}Скопировать приглашение</button></section>`;
+  return `<section class="participants"><div class="row spread"><h2>Участники</h2><span class="small muted">${snapshot.participants.length}</span></div>${snapshot.participants.length?snapshot.participants.map(p=>`<div class="person"><span class="person-info"><span class="avatar">${esc(p.name.slice(0,2).toLocaleUpperCase('ru'))}</span><span class="person-name">${esc(p.name)}</span></span><span class="person-status ${p.voted?'done':''}">${p.voted?'Ответил':currentRole()?.status==='open'?'Оценивает':'Ожидает'}</span></div>`).join(''):'<p class="participant-empty">Здесь появятся участники, когда присоединятся по ссылке и введут своё имя.</p>'}<button class="invite-link" data-action="invite" aria-label="Показать QR-код">${icon('qr')}Показать QR-код</button></section>`;
 }
 function leaderboard() {
   const rows=snapshot.leaderboard;
@@ -215,7 +217,7 @@ function participantPage() {
 }
 function presentPage() {
   const role=currentRole();
-  return `${header()}<main class="present-page">${code==='demo'?'<span class="badge">Демонстрация общего экрана</span>':''}${snapshot.finished?leaderboard():`<div class="present-role">${statusBadge(role)}<h1 style="margin-top:var(--space-lg)">${esc(role?.name||'Ожидаем начала сессии')}</h1></div><div class="present-grid"><section><div class="criteria">${criterionRows(role)}</div></section><aside><div class="present-count">${snapshot.currentCount}<small> / ${snapshot.participants.length}</small></div><p class="muted">участников отправили оценки</p>${progress(snapshot.currentCount,snapshot.participants.length)}${role?.status==='closed'&&snapshot.results[role.id]?.count?`<div style="margin-top:var(--space-xl)"><span class="small muted">Итог роли из 5</span><p class="score-large">${fmt(snapshot.results[role.id].score)}</p></div>`:''}<div class="present-invite"><p class="small muted">Присоединяйтесь с телефона</p><strong>Откройте Rolelab и введите имя</strong><p class="join-url">${esc(joinUrl())}</p></div></aside></div>`}<footer class="bottom-bar"><span>Калибровка бизнес-ролей</span>${code==='demo'||isHost()?viewSwitcher():''}</footer></main>`;
+  return `${header()}<main class="present-page">${code==='demo'?'<span class="badge">Демонстрация общего экрана</span>':''}${snapshot.finished?leaderboard():`<div class="present-role">${statusBadge(role)}<h1 style="margin-top:var(--space-lg)">${esc(role?.name||'Ожидаем начала сессии')}</h1></div><div class="present-grid"><section><div class="criteria">${criterionRows(role)}</div></section><aside><div class="present-count">${snapshot.currentCount}<small> / ${snapshot.participants.length}</small></div><p class="muted">участников отправили оценки</p>${progress(snapshot.currentCount,snapshot.participants.length)}${role?.status==='closed'&&snapshot.results[role.id]?.count?`<div style="margin-top:var(--space-xl)"><span class="small muted">Итог роли из 5</span><p class="score-large">${fmt(snapshot.results[role.id].score)}</p></div>`:''}<div class="present-invite"><p class="small muted">Присоединяйтесь с телефона</p><div class="present-qr">${qrSvg(joinUrl(),'present-qr')}</div><p class="join-url">${esc(joinUrl())}</p><button class="btn" data-action="invite">${icon('qr')}Увеличить QR-код</button></div></aside></div>`}<footer class="bottom-bar"><span>Калибровка бизнес-ролей</span>${code==='demo'||isHost()?viewSwitcher():''}</footer></main>`;
 }
 function render() {
   if (!profile) { $('#app').innerHTML = entryPage(); return; }
@@ -228,10 +230,26 @@ function render() {
   $('#app').innerHTML=view==='participant'?participantPage():view==='present'?presentPage():hostPage();
   if(focusName){ const next=document.getElementsByName(focusName)[0]; if(next && next.type!=='radio'){if(inputValue!==undefined)next.value=inputValue;next.focus({preventScroll:true});if(typeof selection==='number')try{next.setSelectionRange(selection,selection);}catch{}} }
 }
-function joinUrl() { if(code==='demo')return invitationUrl(location.href,code);const url=new URL(location.href);url.search='';url.hash='';return url.href; }
-function showDialog(content) { const dialog=$('#dialog'); dialog.innerHTML=content; if(!dialog.open)dialog.showModal(); }
+function joinUrl() { return siteUrl(location.href); }
+function showDialog(content, className = '') { const dialog=$('#dialog');dialog.className=className;dialog.removeAttribute('aria-labelledby');dialog.innerHTML=content; if(!dialog.open)dialog.showModal(); }
 function dialogHeader(title) { return `<div class="dialog-title"><h2>${title}</h2><button class="btn btn-link icon-btn" data-action="close-dialog" aria-label="Закрыть">${icon('close')}</button></div>`; }
-async function copy(text) { try { await navigator.clipboard.writeText(text); toast('Ссылка скопирована'); } catch { showDialog(`${dialogHeader('Ссылка для участников')}<p>Скопируйте ссылку и отправьте участникам.</p><div class="copy-field">${esc(text)}</div>`); } }
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text);const feedback=$('#invite-feedback');if(feedback)feedback.textContent='Ссылка скопирована. Отправьте её участникам.';else toast('Ссылка скопирована'); }
+  catch {
+    const field=$('#invite-url');
+    if(field){field.focus();field.select();$('#invite-feedback').textContent='Ссылка выделена. Скопируйте её и отправьте участникам.';}
+    else showDialog(`${dialogHeader('Ссылка для участников')}<p>Скопируйте ссылку и отправьте участникам.</p><div class="copy-field">${esc(text)}</div>`);
+  }
+}
+function showInvitation() {
+  const url=joinUrl();
+  showDialog(`<div class="invitation-screen" id="invitation-screen"><div class="invitation-top"><span class="brand">${icon('chart')}Rolelab</span><div class="row"><button class="btn" data-action="invite-fullscreen" aria-label="На весь экран">${icon('monitor')}<span>На весь экран</span></button><button class="btn icon-btn" data-action="close-dialog" aria-label="Закрыть QR-код">${icon('close')}</button></div></div><div class="invitation-body"><div class="qr-code">${qrSvg(url)}</div><div class="invitation-info"><span class="section-label">Присоединяйтесь к встрече</span><h1 id="invitation-title">Наведите камеру.<br>Введите имя.<br>Вы на встрече.</h1><p class="invitation-description">Отсканируйте QR-код телефоном — откроется текущая встреча.</p><div class="invitation-share"><label class="form-group" for="invite-url">С компьютера — по этой же ссылке<input id="invite-url" readonly value="${esc(url)}" spellcheck="false"></label><button class="btn btn-primary" data-action="copy-invite">${icon('copy')}Скопировать ссылку</button><p id="invite-feedback" class="invitation-feedback" role="status" aria-live="polite"></p></div></div></div></div>`, 'invitation-dialog');
+  $('#dialog').setAttribute('aria-labelledby','invitation-title');
+}
+async function toggleInviteFullscreen() {
+  try { if(document.fullscreenElement?.id==='invitation-screen')await document.exitFullscreen();else await $('#invitation-screen').requestFullscreen(); }
+  catch { $('#invite-feedback').textContent='QR-код уже развёрнут на всю страницу. Полный экран браузера можно включить клавишей F11.'; }
+}
 async function act(action,roleId) {
   if(busy || !isHost())return;
   busy=true;
@@ -260,7 +278,7 @@ document.addEventListener('click',async event=>{
     profile=null;joining=null;automaticPerson=null;voteDraft={};waitingForCurrent=true;waitingError='';snapshot=null;lastSignature='';try{sessionStorage.removeItem(ENTRY_KEY);}catch{}
     $('#dialog').close();render();return;
   }
-  if(!profile || (!isAdministrator(profile) && !['retry','invite','export','close-dialog'].includes(action)))return;
+  if(!profile || (!isAdministrator(profile) && !['retry','invite','copy-invite','invite-fullscreen','export','close-dialog'].includes(action)))return;
   if(action==='close-dialog')$('#dialog').close();
   else if(action==='create')createDialog();
   else if(action==='reset-demo')showDialog(`${dialogHeader('Начать демонстрацию заново?')}<p>Примеры оценок и участников будут очищены только в этом браузере.</p><div class="actions"><button class="btn" data-action="close-dialog">Отмена</button><button class="btn btn-primary" data-action="confirm-reset">Начать заново</button></div>`);
@@ -270,7 +288,9 @@ document.addEventListener('click',async event=>{
   else if(action==='session-tab')route('host','session');
   else if(action==='ranking')route('host','ranking');
   else if(action==='present'){const url=new URL(location.href);url.searchParams.set('view','present');url.searchParams.delete('tab');window.open(url.href,'rolelab-present','noopener');}
-  else if(action==='invite')await copy(joinUrl());
+  else if(action==='invite')showInvitation();
+  else if(action==='copy-invite')await copy(joinUrl());
+  else if(action==='invite-fullscreen')await toggleInviteFullscreen();
   else if(action==='export')exportResults();
   else if(action==='open'||action==='close')await act(action);
   else if(action==='next'){const next=snapshot.roles.find(r=>r.status==='pending');if(next)await act('select',next.id);else route('host','ranking');}
@@ -319,6 +339,12 @@ document.addEventListener('submit',async event=>{
 window.addEventListener('storage',event=>{if(event.key===DEMO_KEY&&code==='demo')refresh();});
 window.addEventListener('popstate',()=>{const query=new URLSearchParams(location.search);view=query.get('view')||'host';tab=query.get('tab')||'session';code=query.get('s')||'demo';linkAccessKey=query.get('key')||'';invitedToDemo=query.get('view')==='participant';automaticSession=!query.has('s')&&!invitedToDemo;waitingForCurrent=true;waitingError='';snapshot=null;lastSignature='';refresh(true);});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
+$('#dialog').addEventListener('close',()=>{if(document.fullscreenElement?.id==='invitation-screen')document.exitFullscreen().catch(()=>{});});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&$('#dialog').open&&$('#dialog').classList.contains('invitation-dialog')){event.preventDefault();$('#dialog').close();}});
+document.addEventListener('fullscreenchange',()=>{
+  const button=$('[data-action="invite-fullscreen"]');
+  if(button){const label=document.fullscreenElement?.id==='invitation-screen'?'Выйти из полного экрана':'На весь экран';button.querySelector('span').textContent=label;button.setAttribute('aria-label',label);}
+});
 async function init(){
   try {
     if (validateSupabaseConfig(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)) {
