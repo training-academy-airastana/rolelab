@@ -18,6 +18,12 @@
   --color-danger: #b43b3b;
   --color-danger-soft: #fcecec;
   --color-focus: #1668bf;
+  --color-chart-safety: #1668bf;
+  --color-chart-continuity: #78a9df;
+  --color-chart-scarcity: #24786a;
+  --color-chart-competence: #79b8a8;
+  --color-chart-financial: #a5722a;
+  --color-chart-strategy: #d2ac74;
   --color-overlay: #102e4770;
   --color-shadow: #102e471c;
   --font-body: "Segoe UI", Arial, sans-serif;

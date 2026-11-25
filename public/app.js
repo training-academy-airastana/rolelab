@@ -28,6 +28,7 @@ const icons = {
   copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/>',
   download: '<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>',
   close: '<path d="m6 6 12 12M6 18 18 6"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
   qr: '<path d="M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM15 15h2v2h-2zM21 15v6h-6m2-10v2m-6 2h2m-2 4v2"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10h.01"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a19 19 0 0 1 0 18 19 19 0 0 1 0-18Z"/>',
@@ -63,6 +64,7 @@ let backend = false;
 let disconnected = false;
 let busy = false;
 let exporting = false;
+const expandedResults = new Set();
 let voteDraft = {};
 let lastSignature = '';
 let pollTimer;
@@ -215,9 +217,36 @@ function controlBox() {
 function participants() {
   return `<section class="participants"><div class="row spread"><h2>Participants</h2><span class="small muted">${snapshot.participants.length}</span></div>${snapshot.participants.length?snapshot.participants.map(p=>`<div class="person"><span class="person-info"><span class="avatar">${esc(p.name.slice(0,2).toLocaleUpperCase('en-GB'))}</span><span class="person-name">${esc(p.name)}</span></span><span class="person-status ${p.voted?'done':''}">${p.voted?'Submitted':currentRole()?.status==='open'?'Scoring':'Waiting'}</span></div>`).join(''):'<p class="participant-empty">Participants appear here after opening the link and entering their name.</p>'}<button class="invite-link" data-action="invite" aria-label="Show QR code">${icon('qr')}Show QR code</button></section>`;
 }
+function dimensionChart(role, index) {
+  return `<section class="role-breakdown" aria-labelledby="breakdown-title-${index}">
+    <div class="breakdown-heading"><h3 id="breakdown-title-${index}">Dimension scores</h3><p>Average participant scores on a 1–5 scale. Weights are shown separately.</p></div>
+    <div class="dimension-scale" aria-hidden="true"><span class="dimension-scale-spacer"></span><div>${[0,1,2,3,4,5].map(n=>`<span>${n}</span>`).join('')}</div><span>Avg.</span></div>
+    <ol class="dimension-bars">${CRITERIA.map((c,i)=>{
+      const average=role.averages[i];
+      const width=Number.isFinite(average)?Math.max(0,Math.min(5,average))/5:0;
+      return `<li class="dimension-bar dimension-${c.id}"><div class="dimension-bar-label"><span class="dimension-dot" aria-hidden="true"></span><span>${esc(c.title)}<small>${c.weight}% weight</small></span></div><div class="dimension-track" aria-hidden="true"><span style="--score:${width}"></span></div><strong class="dimension-value"><span class="sr-only">Average score: </span>${fmt(average)}<span class="sr-only"> out of 5</span></strong></li>`;
+    }).join('')}</ol></section>`;
+}
+function rankingRow(role, index) {
+  const open=expandedResults.has(`${code}:${role.id}`);
+  return `<tr class="${index===0?'rank-first':''}"><td class="rank">${role.place}</td><td><button type="button" class="role-result-toggle" data-action="toggle-result" data-result="${esc(role.id)}" data-result-index="${index}" aria-expanded="${open}" aria-controls="role-breakdown-${index}" aria-label="${open?'Hide':'Show'} dimension scores for ${esc(role.name)}"><span><strong>${esc(role.name)}</strong><small class="result-toggle-hint">${open?'Hide':'View'} dimension scores</small></span>${icon('chevron')}</button></td><td class="votes-col">${role.count}</td><td><div class="score-line"><span class="score">${fmt(role.score)} <small>/ 5</small></span>${progress(role.score,5)}</div></td></tr>
+    <tr class="role-details-row" id="role-breakdown-${index}" ${open?'':'hidden'}><td colspan="4">${open?dimensionChart(role,index):''}</td></tr>`;
+}
+function toggleResult(button) {
+  const role=snapshot.leaderboard.find(r=>r.id===button.dataset.result);
+  if(!role)return;
+  const key=`${code}:${role.id}`, open=!expandedResults.has(key);
+  if(open)expandedResults.add(key);else expandedResults.delete(key);
+  const row=document.getElementById(button.getAttribute('aria-controls'));
+  row.hidden=!open;
+  if(open)row.firstElementChild.innerHTML=dimensionChart(role,button.dataset.resultIndex);
+  button.setAttribute('aria-expanded',String(open));
+  button.setAttribute('aria-label',`${open?'Hide':'Show'} dimension scores for ${role.name}`);
+  button.querySelector('.result-toggle-hint').textContent=`${open?'Hide':'View'} dimension scores`;
+}
 function leaderboard() {
   const rows=snapshot.leaderboard;
-  return `<section><div class="results-intro"><div><h2>Prioritised role list</h2><p>Average participant scores, weighted by dimension.</p></div><button class="btn" data-action="export" ${rows.length&&!exporting?'':'disabled'}>${icon('download')}${exporting?'Preparing Excel…':'Download Excel'}</button></div>${rows.length?`<table class="leader-table"><thead><tr><th>Rank</th><th>Role title</th><th class="votes-col">Responses</th><th>Weighted score (1–5)</th></tr></thead><tbody>${rows.map((r,i)=>`<tr class="${i===0?'rank-first':''}"><td class="rank">${r.place}</td><td><strong>${esc(r.name)}</strong></td><td class="votes-col">${r.count}</td><td><div class="score-line"><span class="score">${fmt(r.score)} <small>/ 5</small></span>${progress(r.score,5)}</div></td></tr>`).join('')}</tbody></table>`:`<div class="empty">${icon('trophy')}<h2>The prioritised role list will appear after scoring</h2><p>Close scoring for at least one role with submitted scores.</p><button class="btn" data-action="session-tab">Back to workshop ${icon('arrow')}</button></div>`}<p class="small muted" style="margin-top:var(--space-lg)">Weighted score = the sum of each dimension average multiplied by its weight. Roles without responses are excluded.</p></section>`;
+  return `<section><div class="results-intro"><div><h2>Prioritised role list</h2><p>Average participant scores, weighted by dimension.</p></div><button class="btn" data-action="export" ${rows.length&&!exporting?'':'disabled'}>${icon('download')}${exporting?'Preparing Excel…':'Download Excel'}</button></div>${rows.length?`<table class="leader-table"><thead><tr><th>Rank</th><th>Role title</th><th class="votes-col">Responses</th><th>Weighted score (1–5)</th></tr></thead><tbody>${rows.map(rankingRow).join('')}</tbody></table>`:`<div class="empty">${icon('trophy')}<h2>The prioritised role list will appear after scoring</h2><p>Close scoring for at least one role with submitted scores.</p><button class="btn" data-action="session-tab">Back to workshop ${icon('arrow')}</button></div>`}<p class="small muted" style="margin-top:var(--space-lg)">Weighted score = the sum of each dimension average multiplied by its weight. Roles without responses are excluded.</p></section>`;
 }
 function criteriaPage() {
   return `<section class="evaluation"><div class="evaluation-head"><h2>Scoring and calibration</h2><p>The score supports discussion. It does not replace judgement or functional evidence.</p></div><div class="criteria">${criterionRows(null,true)}</div><div class="evaluation-foot">${icon('info')}Score each dimension from 1 to 5. The score supports discussion. It does not replace judgement or functional evidence.</div></section>`;
@@ -250,9 +279,11 @@ function render() {
   if(!isHost()&&view==='host') view='participant';
   // Keep the voting form intact when other participants send their answers.
   const focused=document.activeElement; const focusName=focused?.getAttribute('name'); const selection=focused?.selectionStart; const inputValue=focused?.value;
+  const focusedResult=focused?.closest('[data-action="toggle-result"]')?.dataset.result;
   $('#app').innerHTML=view==='participant'?participantPage():view==='present'?presentPage():hostPage();
   if(disconnected&&!$('#connection-error'))$('#app main')?.insertAdjacentHTML('afterbegin','<div id="connection-error" class="live-error" role="alert">Connection lost. Reconnecting…</div>');
   if(focusName){ const next=document.getElementsByName(focusName)[0]; if(next && next.type!=='radio'){if(inputValue!==undefined)next.value=inputValue;next.focus({preventScroll:true});if(typeof selection==='number')try{next.setSelectionRange(selection,selection);}catch{}} }
+  if(focusedResult)Array.from(document.querySelectorAll('[data-action="toggle-result"]')).find(button=>button.dataset.result===focusedResult)?.focus({preventScroll:true});
 }
 function joinUrl() { return siteUrl(location.href); }
 function showDialog(content, className = '') { const dialog=$('#dialog');dialog.className=className;dialog.removeAttribute('aria-labelledby');dialog.innerHTML=content; if(!dialog.open)dialog.showModal(); }
@@ -317,8 +348,9 @@ document.addEventListener('click',async event=>{
     profile=null;joining=null;automaticPerson=null;voteDraft={};waitingForCurrent=true;waitingError='';snapshot=null;lastSignature='';try{sessionStorage.removeItem(ENTRY_KEY);}catch{}
     $('#dialog').close();render();return;
   }
-  if(!profile || (!isAdministrator(profile) && !['retry','invite','copy-invite','invite-fullscreen','export','close-dialog'].includes(action)))return;
+  if(!profile || (!isAdministrator(profile) && !['retry','invite','copy-invite','invite-fullscreen','export','close-dialog','toggle-result'].includes(action)))return;
   if(action==='close-dialog')$('#dialog').close();
+  else if(action==='toggle-result')toggleResult(el);
   else if(action==='create')createDialog();
   else if(action==='reset-demo')showDialog(`${dialogHeader('Reset the demo?')}<p>Sample scores and participants will be cleared only in this browser.</p><div class="actions"><button class="btn" data-action="close-dialog">Cancel</button><button class="btn btn-primary" data-action="confirm-reset">Reset demo</button></div>`);
   else if(action==='confirm-reset'){demoSet(demoInitial());try{localStorage.removeItem('rolelab-person-demo');}catch{}voteDraft={};$('#dialog').close();route('host');}

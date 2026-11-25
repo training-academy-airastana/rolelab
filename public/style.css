@@ -244,4 +244,45 @@ dialog .invitation-description { margin-top:var(--space-lg); font-size:clamp(16p
 @media(min-width:1600px) { .host-workspace { grid-template-columns:280px minmax(0,1fr); } }
 @media(max-width:760px) { .host-workspace { grid-template-columns:minmax(0,1fr); } .host-setup { padding-top:var(--space-lg); } }
 .header-actions .badge { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.role-result-toggle { display:flex; align-items:center; justify-content:space-between; gap:var(--space-md); width:100%; min-height:48px; padding:0; border:0; background:transparent; color:var(--color-ink); text-align:left; cursor:pointer; font:inherit; }
+.role-result-toggle > span { min-width:0; overflow-wrap:anywhere; }
+.role-result-toggle > .icon { flex-shrink:0; width:18px; height:18px; color:var(--color-accent); transition:transform var(--duration); }
+.role-result-toggle[aria-expanded="true"] > .icon { transform:rotate(180deg); }
+.result-toggle-hint { display:block; margin-top:var(--space-2xs); color:var(--color-accent); font-size:12px; font-weight:400; }
+.role-result-toggle:hover .result-toggle-hint { text-decoration:underline; }
+.role-result-toggle:active { opacity:.75; }
+.leader-table .role-details-row > td { padding:0 0 var(--space-md); }
+.role-details-row[hidden] { display:none; }
+.role-breakdown { padding:var(--space-lg); border:1px solid var(--color-rule); border-top:0; border-radius:0 0 var(--radius-md) var(--radius-md); background:var(--color-surface); }
+.breakdown-heading { margin-bottom:var(--space-lg); }
+.breakdown-heading h3 { font-size:16px; font-weight:600; }
+.breakdown-heading p { margin-top:var(--space-2xs); font-size:12px; color:var(--color-muted); }
+.dimension-scale,.dimension-bar { display:grid; grid-template-columns:minmax(220px,36%) minmax(0,1fr) 52px; gap:var(--space-md); align-items:center; }
+.dimension-scale { margin-bottom:var(--space-sm); color:var(--color-muted); font-size:11px; text-align:right; }
+.dimension-scale > div { display:flex; justify-content:space-between; }
+.dimension-bars { list-style:none; padding:0; margin:0; }
+.dimension-bar { padding-block:var(--space-sm); }
+.dimension-bar:nth-child(2),.dimension-bar:nth-child(4) { margin-bottom:var(--space-sm); padding-bottom:var(--space-lg); border-bottom:1px solid var(--color-rule); }
+.dimension-bar-label { display:flex; gap:var(--space-sm); align-items:flex-start; font-size:13px; line-height:1.45; }
+.dimension-bar-label small { display:block; margin-top:2px; color:var(--color-muted); font-size:12px; }
+.dimension-dot { flex-shrink:0; width:9px; height:9px; margin-top:5px; border-radius:50%; background:var(--bar-color); }
+.dimension-track { height:14px; border-radius:3px; background:repeating-linear-gradient(to right,var(--color-soft) 0,var(--color-soft) calc(20% - 1px),var(--color-rule) calc(20% - 1px),var(--color-rule) 20%); overflow:hidden; }
+.dimension-track > span { display:block; width:100%; height:100%; transform:scaleX(var(--score)); transform-origin:left; background:var(--bar-color); border-radius:3px; }
+.dimension-value { text-align:right; font-size:14px; font-weight:600; font-variant-numeric:tabular-nums; }
+.dimension-safety { --bar-color:var(--color-chart-safety); }
+.dimension-continuity { --bar-color:var(--color-chart-continuity); }
+.dimension-scarcity { --bar-color:var(--color-chart-scarcity); }
+.dimension-competence { --bar-color:var(--color-chart-competence); }
+.dimension-financial { --bar-color:var(--color-chart-financial); }
+.dimension-strategy { --bar-color:var(--color-chart-strategy); }
+@media(max-width:760px) {
+  .role-result-toggle { gap:var(--space-xs); }
+  .result-toggle-hint { font-size:11px; }
+  .role-breakdown { padding:var(--space-md); }
+  .dimension-bar { grid-template-columns:minmax(0,1fr) 44px; gap:var(--space-xs) var(--space-sm); }
+  .dimension-bar-label { grid-column:1/-1; }
+  .dimension-scale { grid-template-columns:minmax(0,1fr) 44px; gap:var(--space-sm); }
+  .dimension-scale-spacer { display:none; }
+  .dimension-bar-label small { display:inline; margin-left:var(--space-xs); white-space:nowrap; }
+}
 @media(max-width:760px) { .header-actions [data-action="change-name"] span { display:none; } }
