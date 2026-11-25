@@ -4,7 +4,6 @@ const NAVY = 'FF102E47', BLUE = 'FF1668BF', PALE = 'FFEAF3FE';
 const fill = argb => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
 const font = (bold = false, color = NAVY, size = 11) => ({ name: 'Arial', size, bold, color: { argb: color } });
 const formula = (expression, result) => ({ formula: expression, result });
-const BAR_COLOURS = ['1668BF', '78A9DF', '24786A', '79B8A8', 'E8CF70', 'F4E7A4'];
 
 export async function createResultsWorkbook(snapshot, { exportedAt = new Date() } = {}) {
   if (!snapshot.leaderboard?.length) throw new Error('There are no scored roles to export yet.');
@@ -66,22 +65,9 @@ export async function createResultsWorkbook(snapshot, { exportedAt = new Date() 
       cell.fill = fill(j === 2 ? PALE : i % 2 ? 'FFF5F7FA' : 'FFFFFFFF');
       cell.font = font(j === 2 || role.place <= 3, j === 2 ? BLUE : NAVY);
       cell.alignment = { vertical: 'middle', wrapText: true, horizontal: j === 1 ? 'left' : 'center' };
-      if (j >= 4) cell.alignment = { ...cell.alignment, horizontal: 'right', indent: 1 };
       if (j === 2 || j >= 4) cell.numFmt = '0.00';
     });
     sheet.getRow(row).height = Math.max(34, Math.ceil(role.name.length / 42) * 16 + 10);
-  });
-  const theme = typeof document === 'undefined' ? null : getComputedStyle(document.documentElement);
-  CRITERIA.forEach((criterion, i) => {
-    // Follow the website palette, including future colour changes.
-    const cssColour = theme?.getPropertyValue(`--color-chart-${criterion.id}`).trim();
-    const colour = /^#[0-9a-f]{6}$/i.test(cssColour || '') ? cssColour.slice(1).toUpperCase() : BAR_COLOURS[i];
-    const column = String.fromCharCode(69 + i);
-    sheet.addConditionalFormatting({ ref: `${column}8:${column}${last}`, rules: [{
-      type: 'dataBar', cfvo: [{ type: 'num', value: 0 }, { type: 'num', value: 5 }],
-      color: { argb: `FF${colour}` }, showValue: true, gradient: false, border: false,
-      minLength: 0, maxLength: 70, // Leave space for the numeric score on the right.
-    }] });
   });
   sheet.getCell('A7').note = 'Ranks use unrounded scores; scores within 1E-10 share a rank, matching Rolelab.';
   sheet.getCell('C7').note = 'Weighted score = sum of each dimension average × its weight. Only closed roles with submitted scores are included. Source: workshop group results at export time.';
